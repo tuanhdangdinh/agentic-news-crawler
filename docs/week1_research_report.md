@@ -12,7 +12,7 @@ Prepared: 2026-05-29
 
 ## Overview
 
-### Why We Need to Crawl — A Plain-Language Explanation
+### Motivation
 
 Financial markets do not move on numbers alone. A stock price drops not because a spreadsheet changed, but because a company announced bad earnings, a government tightened regulations, or a central bank shifted its interest rate stance. An autonomous trading agent that only reads price charts is flying half-blind — it sees *what* the market did but not *why*, and it has no warning before the next move happens.
 
