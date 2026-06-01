@@ -5,7 +5,7 @@ description = "Agent-driven LLM crawler with structured extraction"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
-    "crawl4ai>=0.4.0",
+    "crawl4ai==0.8.6",
     "playwright>=1.44.0",
     "jinja2>=3.1.0",
     "jsonschema>=4.23.0",
