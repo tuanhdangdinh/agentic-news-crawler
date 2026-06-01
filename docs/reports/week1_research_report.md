@@ -20,7 +20,7 @@
 - **Web crawling is the pipeline that bridges public news sites and the trading agent** — it visits a URL, renders the page, strips everything irrelevant, and returns clean article text the LLM can actually read
 - Without a crawler, the trading agent has no awareness of the world outside price data
 
-### What the Crawl Tool Does for the Trading Agent
+### What crawl-tool Does for the Trading Agent
 
 - Acts as the agent's **eyes and ears on the Vietnamese financial internet**
 - Given a plain-language goal — e.g. *"collect all news about VIC stock in the last 7 days"* — it:
@@ -53,7 +53,7 @@ Each extracted record includes the article title, publish date, source URL, and 
 ```mermaid
 flowchart LR
     NEWS["Vietnamese Finance <br> News Sites <br> CafeF · VnEconomy <br> VietStock · Cafebiz"]
-    CRAWL["Crawl Tool <br> Agent-driven <br> JS rendering <br> Date filtering <br> Structured extraction"]
+    CRAWL["crawl-tool <br> Agent-driven <br> JS rendering <br> Date filtering <br> Structured extraction"]
     JSON["Structured JSON <br> Article facts <br> Tickers · Figures <br> Dates · Sources"]
     AGENT["Autonomous Trading Agent"]
     DECISION["Trading Decisions <br> Buy · Hold · Sell"]
@@ -66,13 +66,13 @@ flowchart LR
     AGENT --> DECISION
 ```
 
-- The crawl tool provides the **qualitative, news-driven half** of the agent's information diet
+- crawl-tool provides the **qualitative, news-driven half** of the agent's information diet
 - Price and volume data provides the quantitative half
 - Together they give the agent both the *signal* (what the market is doing) and the *story* (why) — closer to how a professional analyst actually works
 
 ### This Report
 
-- Documents the **Week 1 library selection** for the Agent Crawl MVP
+- Documents the **Week 1 library selection** for crawl-tool
 - The crawl library is **not** responsible for making crawl decisions — Claude owns that
   - Library role: reliable per-page fetch, JS rendering, boilerplate removal, link extraction
   - Agent role: goal interpretation, frontier selection, extraction decisions, stopping conditions
@@ -82,7 +82,7 @@ flowchart LR
 
 ## Objective
 
-- Choose the crawl library for `src/crawler.py` in the Agent Crawl MVP
+- Choose the crawl library for `src/crawler.py` in crawl-tool
 - Must crawl Vietnamese economy/finance news sites, render JS, respect guardrails, extract LLM-ready content, expose links, and keep operational overhead low
 - Library is **not** expected to make crawl decisions — the Claude agent loop owns that
 

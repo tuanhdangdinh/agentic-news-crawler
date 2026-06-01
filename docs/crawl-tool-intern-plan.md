@@ -1,10 +1,10 @@
 ---
-title: crawl_tool_intern_plan
+title: crawl-tool-intern-plan
 toc_min_heading_level: 2
 toc_max_heading_level: 3
 ---
 
-# Crawl Tool — Intern Project Plan
+# crawl-tool — Intern Project Plan
 
 ---
 
@@ -21,7 +21,7 @@ toc_max_heading_level: 3
 
 | Field | Value |
 |---|---|
-| **Project name** | Agent Crawl MVP |
+| **Project name** | crawl-tool |
 | **Duration** | 6 weeks |
 | **Scope** | Goal-directed LLM crawler with structured extraction, depth control, date filtering, and JSON output |
 
@@ -535,4 +535,3 @@ crawl-tool/
 ---
 
 </details>
-
