@@ -1,0 +1,14 @@
+Generate a JSON Schema for the structured data described in the extraction prompt below.
+
+## Extraction Prompt
+{{ prompt }}
+
+## Requirements
+- Return a valid JSON Schema (draft-07) object
+- Use `"type": "object"` at the top level
+- Include a `"properties"` object with one key per field mentioned in the prompt
+- Set appropriate types: `"string"`, `"number"`, `"array"`, `"boolean"`
+- Add fields to `"required"` only when they are explicitly required by the prompt
+- Keep the schema minimal — do not add fields not mentioned in the prompt
+
+Respond with a JSON Schema object only — no explanation, no markdown code fences, just the raw JSON.

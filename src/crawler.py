@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
 
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 _BROWSER_CFG = BrowserConfig(browser_type="chromium", headless=True)
 
@@ -19,8 +22,7 @@ _RUN_CFG = CrawlerRunConfig(
 )
 
 
-@dataclass
-class PageResult:
+class PageResult(BaseModel):
     """Normalised output of a single page fetch."""
 
     url: str
@@ -28,11 +30,11 @@ class PageResult:
     status_code: int | None
     title: str | None
     markdown: str
-    raw_markdown: str | None
-    html: str | None
-    links_internal: list[str] = field(default_factory=list)
-    links_external: list[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
+    raw_markdown: str | None = None
+    html: str | None = None
+    links_internal: list[str] = Field(default_factory=list)
+    links_external: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
     success: bool = True
     error: str | None = None
 
@@ -66,19 +68,20 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
             ),
         )
 
+    logger.debug("fetch start: %s", url)
+
     try:
         async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
             result = await crawler.arun(url=url, config=cfg)
 
         if not result.success:
+            logger.warning("fetch failed: %s — status=%s error=%s", url, result.status_code, result.error_message)
             return PageResult(
                 url=url,
                 final_url=url,
                 status_code=result.status_code,
                 title=None,
                 markdown="",
-                raw_markdown=None,
-                html=None,
                 success=False,
                 error=result.error_message or "crawl failed",
             )
@@ -91,6 +94,11 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
 
         metadata = result.metadata or {}
         title = metadata.get("title") or metadata.get("og:title")
+
+        logger.debug(
+            "fetch ok: %s — status=%s chars=%d links_internal=%d links_external=%d",
+            url, result.status_code, len(markdown), len(internal), len(external),
+        )
 
         return PageResult(
             url=url,
@@ -108,14 +116,13 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
         )
 
     except Exception as exc:  # noqa: BLE001
+        logger.warning("fetch exception: %s — %s", url, exc)
         return PageResult(
             url=url,
             final_url=url,
             status_code=None,
             title=None,
             markdown="",
-            raw_markdown=None,
-            html=None,
             success=False,
             error=str(exc),
         )

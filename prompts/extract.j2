@@ -1,0 +1,18 @@
+Extract structured data from the page content below according to the extraction prompt.
+
+## Extraction Prompt
+{{ prompt }}
+
+## JSON Schema
+Your response must be a valid JSON object matching this schema:
+```json
+{{ schema_json }}
+```
+
+## Page Content
+Focus only on the **main article body** — the primary headline, author, date, and article text.
+Ignore navigation menus, sidebars, related-article teasers, social share buttons, comment sections, and footer content.
+If a field cannot be found in the main article, set it to null.
+{{ markdown | truncate(12000, end="… [truncated]") }}
+
+Respond with a JSON object only — no explanation, no markdown code fences, just the raw JSON.

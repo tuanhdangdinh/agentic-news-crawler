@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
-from datetime import datetime, timezone
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.crawler import PageResult
 
+logger = logging.getLogger(__name__)
+
 
 def _page_record(page: PageResult) -> dict:
     """Convert a PageResult to a plain dict, dropping html to keep output lean."""
-    d = asdict(page)
-    d.pop("html", None)
-    d.pop("raw_markdown", None)
-    return d
+    return page.model_dump(exclude={"html", "raw_markdown"})
 
 
 def write_json(pages: list[PageResult], path: str, run_meta: dict | None = None) -> None:
@@ -28,7 +27,7 @@ def write_json(pages: list[PageResult], path: str, run_meta: dict | None = None)
     """
     output = {
         "meta": {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "total_pages": len(pages),
             "successful": sum(1 for p in pages if p.success),
             "failed": sum(1 for p in pages if not p.success),
@@ -37,6 +36,7 @@ def write_json(pages: list[PageResult], path: str, run_meta: dict | None = None)
         "pages": [_page_record(p) for p in pages],
     }
     Path(path).write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.debug("wrote json: %s — %d pages", path, len(pages))
 
 
 def write_jsonl(pages: list[PageResult], path: str) -> None:
@@ -48,6 +48,7 @@ def write_jsonl(pages: list[PageResult], path: str) -> None:
     """
     lines = [json.dumps(_page_record(p), ensure_ascii=False) for p in pages]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.debug("wrote jsonl: %s — %d lines", path, len(pages))
 
 
 def write_results(
