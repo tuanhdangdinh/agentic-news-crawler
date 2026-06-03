@@ -7,6 +7,7 @@
 - Post-review: corrected stale API names, Firecrawl async status, Stagehand Python SDK, and markdown usage guidance
 - Final merge: added Crawlee Python evaluation and Week 2 implementation contract
 
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/db1bc663ee6c3f40cbe81a7f3c6416f72aaabf45)
 ---
 
 ## Overview

@@ -1,0 +1,24 @@
+## Current Page
+- URL: {{ url }}
+- Title: {{ title or "(no title)" }}
+- Depth: {{ depth }} / {{ max_depth }}
+
+## Content
+{{ markdown | truncate(6000, end="… [truncated]") }}
+
+## Internal Links ({{ links_internal | length }} total, showing first 40)
+{% for link in links_internal[:40] %}
+- {{ link }}
+{% endfor %}
+
+## Crawl State
+- Pages collected: {{ pages_count }}
+- Article pages collected: {{ article_pages_count }}{% if min_articles %} / {{ min_articles }}{% endif %}
+- URLs in frontier: {{ frontier_count }} ({{ frontier_reachable }} at reachable depth ≤ {{ max_depth }})
+- URLs visited: {{ visited_count }}
+- Tokens used: {{ tokens_used }} / {{ token_budget }}
+
+Review the content and links above. If this is an index or homepage, add relevant article links to the frontier — do not call `finish` here. Call `finish` only after you have fetched and read enough individual article pages to satisfy the goal, or when no eligible article links remain anywhere in the frontier.
+{% if min_articles %}
+Do not call `finish` until at least {{ min_articles }} article pages have been fetched, unless there are no eligible URLs left to crawl.
+{% endif %}

@@ -4,6 +4,9 @@
 
 **Revision history:**
 - Initial draft: crawler wrapper, JSON output, CLI wiring, smoke test on CafeF
+- Rev 2: `PageResult` migrated from `@dataclass` to Pydantic `BaseModel`; `src/output.py` uses `model_dump()` instead of `dataclasses.asdict`
+
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/db1bc663ee6c3f40cbe81a7f3c6416f72aaabf45)
 
 ---
 
@@ -77,27 +80,26 @@ CrawlerRunConfig(
 - `check_robots_txt=True` — compliance enforced at fetch layer, not just agent layer
 - `PruningContentFilter(threshold=0.6)` — removes low-density nodes (nav, footer, ads) before markdown conversion; threshold 0.6 is conservative (adjust per site if needed)
 
-### `PageResult` Dataclass
+### `PageResult` Model
 
 ```python
-@dataclass
-class PageResult:
+class PageResult(BaseModel):
     url: str              # original requested URL
     final_url: str        # URL after redirects
     status_code: int | None
     title: str | None     # from metadata["title"] or og:title
     markdown: str         # fit_markdown (primary Claude input)
-    raw_markdown: str | None
-    html: str | None      # raw HTML — kept for debugging, excluded from output
-    links_internal: list[str]
-    links_external: list[str]
-    metadata: dict
-    success: bool
-    error: str | None
+    raw_markdown: str | None = None
+    html: str | None = None  # raw HTML — kept for debugging, excluded from output
+    links_internal: list[str] = Field(default_factory=list)
+    links_external: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    success: bool = True
+    error: str | None = None
 ```
 
-- `html` is stored on the object but **excluded from serialised output** — too large; available in memory for debugging
-- `raw_markdown` is also excluded from output — only `markdown` (filtered) is written to file
+- Pydantic `BaseModel` — provides field validation, type coercion, and `.model_dump()` serialisation
+- `html` and `raw_markdown` excluded from serialised output via `model_dump(exclude={"html", "raw_markdown"})`
 - `title` resolution order: `metadata["title"]` → `metadata["og:title"]` → `None`
 
 ### `fetch_page` Signature
@@ -118,7 +120,7 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult
 
 - **Two formats** — JSON (single file with metadata block + pages array) and JSONL (one record per line, better for large crawls and streaming ingestion)
 - **Metadata block in JSON mode** — top-level `meta` object carries run context so the output file is self-describing
-- **`html` and `raw_markdown` excluded** — these fields are dropped during serialisation to keep file sizes manageable; `markdown` (filtered content) is the primary output
+- **`html` and `raw_markdown` excluded** — dropped via `page.model_dump(exclude={"html", "raw_markdown"})` to keep file sizes manageable; `markdown` (filtered content) is the primary output
 
 ### JSON Output Schema
 
@@ -199,7 +201,7 @@ write_results(
 
 **Command:**
 ```bash
-uv run python main.py https://cafef.vn --output output.json
+uv run python main.py https://cafef.vn --output output.json --verbose
 ```
 
 **Results:**
