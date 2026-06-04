@@ -9,6 +9,7 @@ import anthropic
 import jsonschema
 import structlog
 
+from src.date_filter import detect_page_date
 from src.models import PageResult
 from src.prompts import render
 
@@ -22,6 +23,18 @@ def _strip_fences(text: str) -> str:
     text = text.strip()
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     return match.group(1).strip() if match else text
+
+
+def _make_nullable(schema: dict) -> None:
+    """Recursively allow null for every typed field so absent values don't fail validation."""
+    schema.pop("required", None)
+    for prop in schema.get("properties", {}).values():
+        t = prop.get("type")
+        if isinstance(t, str):
+            prop["type"] = [t, "null"]
+        _make_nullable(prop)
+        if "items" in prop and isinstance(prop["items"], dict):
+            _make_nullable(prop["items"])
 
 
 def _validate(data: dict, schema: dict) -> tuple[bool, str]:
@@ -57,11 +70,7 @@ async def infer_schema(prompt: str) -> dict:
     logger.debug("infer_schema response", chars=len(raw))
     try:
         schema = json.loads(raw)
-        schema.pop("required", None)
-        for prop in schema.get("properties", {}).values():
-            t = prop.get("type")
-            if isinstance(t, str):
-                prop["type"] = [t, "null"]  # allow null when field not present in article
+        _make_nullable(schema)
         logger.debug("infer_schema done", properties=len(schema.get("properties", {})))
         return schema
     except json.JSONDecodeError as exc:
@@ -96,11 +105,24 @@ async def extract(
 
     logger.debug("extract start", url=page.url, prompt=prompt[:60], schema_props=len(schema.get("properties", {})))
     client = anthropic.AsyncAnthropic()
+
+    # Prepend the title and detected publish date so they're available even when
+    # article-body scoping (target_elements) has limited the markdown to the body,
+    # which excludes the H1 and date header on sites like CafeF. detect_page_date
+    # is the single source of truth — metadata, then headers, then the URL pattern.
+    header: list[str] = []
+    if page.title:
+        header.append(f"# {page.title}")
+    pub_date = detect_page_date(page)
+    if pub_date:
+        header.append(f"Published: {pub_date.isoformat()}")
+    content = ("\n".join(header) + "\n\n" + page.markdown) if header else page.markdown
+
     user_content = render(
         "extract.j2",
         prompt=prompt,
         schema_json=json.dumps(schema, indent=2, ensure_ascii=False),
-        markdown=page.markdown,
+        markdown=content,
     )
 
     try:

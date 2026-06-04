@@ -285,6 +285,50 @@ async def test_run_agent_logs_finish_reason_at_info(caplog):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_date_filter_drops_out_of_range_article():
+    config = AgentConfig(date_filter="2026-06-01", include_undated=False)
+    # article page dated 2026-06-03 but filter is exactly 2026-06-01 → out of range
+    old_article = _article_page()
+    old_article.metadata["article:published_time"] = "2026-05-01T00:00:00Z"
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=old_article)),
+        patch("src.agent.anthropic.AsyncAnthropic"),
+    ):
+        state = await run_agent(old_article.url, config)
+    assert state.pages == []
+
+
+@pytest.mark.asyncio
+async def test_run_agent_date_filter_keeps_in_range_article():
+    config = AgentConfig(date_filter="2026-06-03", include_undated=False)
+    article = _article_page()  # has article:published_time = 2026-06-03
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=article)),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_end_turn_response())
+        state = await run_agent(article.url, config)
+    assert len(state.pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_date_filter_does_not_drop_navigation_pages():
+    config = AgentConfig(date_filter="2026-06-01", include_undated=False)
+    # _page() has no date and is not an article page — should not be dropped
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=_page())),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_end_turn_response())
+        state = await run_agent("https://cafef.vn", config)
+    assert len(state.pages) == 1
+
+
+@pytest.mark.asyncio
 async def test_run_agent_auto_extracts_from_article_pages():
     article = _article_page()
     extracted = {"title": "Gold prices rise"}

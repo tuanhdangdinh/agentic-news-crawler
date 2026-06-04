@@ -61,6 +61,8 @@ async def run(args: argparse.Namespace) -> None:
         exclude_patterns=args.exclude_pattern,
         extract_prompt=args.extract_prompt,
         extract_schema=extract_schema,
+        date_filter=args.date_filter,
+        include_undated=args.include_undated,
     )
 
     print(f"[crawl-tool] seed={args.url}  depth={args.max_depth}  max_pages={args.max_pages}")

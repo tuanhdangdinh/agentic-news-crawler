@@ -11,7 +11,8 @@ import anthropic
 import structlog
 from pydantic import BaseModel, Field, computed_field
 
-from src.crawler import fetch_page
+from src.crawler import article_selector_for_url, fetch_page
+from src.date_filter import detect_page_date, is_in_range, parse_date_filter
 from src.extractor import extract as extractor_extract
 from src.extractor import infer_schema
 from src.models import PageResult
@@ -19,7 +20,7 @@ from src.prompts import render
 
 logger = structlog.get_logger(__name__)
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-haiku-4-5-20251001"
 MAX_TOOL_TURNS_PER_PAGE = 5
 
 _NUMBER_WORDS = {
@@ -167,7 +168,11 @@ def _is_article_page(page: PageResult) -> bool:
     metadata = page.metadata or {}
     if metadata.get("article:published_time"):
         return True
-
+    # article_selector_for_url is the single source of truth for URL-based
+    # article classification; covers CafeF, TuoiTre, VnEconomy patterns.
+    if article_selector_for_url(page.final_url) is not None:
+        return True
+    # Fallback for sites not yet in the selector map.
     path = urlparse(page.final_url).path
     return bool(re.search(r"/[^/]+-\d{9,}\.chn$", path))
 
@@ -265,6 +270,10 @@ async def _execute_tool(
             return "error: no current page available for extraction"
         prompt = inputs.get("prompt", config.extract_prompt)
         schema = inputs.get("schema") or config.extract_schema
+        if schema is None:
+            logger.info("inferring extraction schema from tool prompt")
+            schema = await infer_schema(prompt)
+            config.extract_schema = schema
         result = await extractor_extract(current_page, prompt, schema)
         if "error" in result:
             logger.warning("extraction error", url=current_page.url, error=result["error"])
@@ -394,6 +403,17 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
     state.frontier.append((_canonical(seed_url), 0))
     min_articles = _parse_min_articles(config.goal)
 
+    date_range = None
+    if config.date_filter:
+        date_range = parse_date_filter(config.date_filter)
+        logger.info(
+            "date filter active",
+            filter=config.date_filter,
+            from_date=str(date_range[0]),
+            to_date=str(date_range[1]),
+            include_undated=config.include_undated,
+        )
+
     if config.extract_prompt and config.extract_schema is None:
         logger.info("inferring extraction schema from prompt")
         config.extract_schema = await infer_schema(config.extract_prompt)
@@ -433,6 +453,12 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
         if not page.success:
             logger.warning("fetch failed", url=url, error=page.error)
             continue
+
+        if date_range is not None and _is_article_page(page):
+            page_date = detect_page_date(page)
+            if not is_in_range(page_date, *date_range, include_undated=config.include_undated):
+                logger.info("page dropped: outside date range", url=url, page_date=str(page_date))
+                continue
 
         page.metadata["depth"] = depth
         state.pages.append(page)

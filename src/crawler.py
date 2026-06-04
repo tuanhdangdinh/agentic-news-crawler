@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
+from urllib.parse import urlparse
 
 import structlog
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
@@ -24,6 +26,54 @@ _RUN_CFG = CrawlerRunConfig(
     ),
 )
 
+# Maps netloc (without www.) → (article URL pattern, CSS selector for body).
+# When a URL matches the pattern, the selector scopes the fetch to the article
+# body only, cutting 60–82% of tokens on article pages.
+_ARTICLE_SELECTORS: dict[str, tuple[str, str]] = {
+    "cafef.vn":     (r"/[^/]+-\d{9,}\.chn$",  ".detail-content"),
+    "tuoitre.vn":   (r"/[^/]+-\d{12,}\.htm$", ".detail-content"),
+    "vneconomy.vn": (r"/[^/]{30,}\.htm$",      ".block-detail-page"),
+}
+
+
+def article_selector_for_url(url: str) -> str | None:
+    """Return the article-body CSS selector for a known site URL, or None.
+
+    This is the single source of truth for URL-based article classification
+    used by both the crawler (scoped fetch) and the agent loop (article tagging).
+    """
+    parsed = urlparse(url)
+    domain = parsed.netloc.removeprefix("www.")
+    entry = _ARTICLE_SELECTORS.get(domain)
+    if entry is None:
+        return None
+    pattern, selector = entry
+    return selector if re.search(pattern, parsed.path) else None
+
+
+def _make_cfg(
+    css_selector: str | None = None,
+    target_elements: list[str] | None = None,
+) -> CrawlerRunConfig:
+    """Build a run config.
+
+    css_selector hard-scopes the whole extraction (HTML, metadata, links, markdown)
+    to a region. target_elements scopes only markdown generation, leaving head
+    metadata and full-page links intact — used for article-body auto-detection so
+    title/date metadata and navigation links survive.
+    """
+    if not css_selector and not target_elements:
+        return _RUN_CFG
+    return CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        check_robots_txt=True,
+        css_selector=css_selector,
+        target_elements=target_elements,
+        markdown_generator=DefaultMarkdownGenerator(
+            content_filter=PruningContentFilter(threshold=0.6)
+        ),
+    )
+
 
 def _extract_links(links_dict: dict) -> tuple[list[str], list[str]]:
     """Pull href strings from Crawl4AI's links dict."""
@@ -32,31 +82,9 @@ def _extract_links(links_dict: dict) -> tuple[list[str], list[str]]:
     return internal, external
 
 
-async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
-    """Fetch a single URL and return a normalised PageResult.
-
-    Args:
-        url: The URL to fetch.
-        css_selector: Optional CSS selector to scope content extraction.
-
-    Returns:
-        PageResult with markdown, links, and metadata. Never raises — failures
-        are returned as PageResult(success=False, error=...).
-    """
-    cfg = _RUN_CFG
-    if css_selector:
-        cfg = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            check_robots_txt=True,
-            css_selector=css_selector,
-            markdown_generator=DefaultMarkdownGenerator(
-                content_filter=PruningContentFilter(threshold=0.6)
-            ),
-        )
-
-    logger.debug("fetch start", url=url)
+async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
+    """Run a single fetch with up to 3 retries on 5xx / exception."""
     max_retries = 3
-
     for attempt in range(max_retries):
         t0 = time.monotonic()
         try:
@@ -145,3 +173,45 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
                 success=False,
                 error=str(exc),
             )
+
+
+async def fetch_page(
+    url: str,
+    css_selector: str | None = None,
+    *,
+    article_body: bool = True,
+) -> PageResult:
+    """Fetch a single URL and return a normalised PageResult.
+
+    Args:
+        url: The URL to fetch.
+        css_selector: Explicit CSS selector that hard-scopes the whole extraction
+            (HTML, metadata, links, markdown) to a region. Overrides article_body
+            auto-detection when provided.
+        article_body: When True (default) and css_selector is None, a known-site
+            article selector is auto-detected and applied as target_elements —
+            scoping only the markdown so head metadata (title, date) and full-page
+            links survive. Pass article_body=False to always fetch the full page.
+
+    Returns:
+        PageResult with markdown, links, and metadata. Never raises — failures
+        are returned as PageResult(success=False, error=...).
+
+    Fallback:
+        If a scoped fetch succeeds but returns empty markdown (e.g. stale
+        selector), one full-page fetch is attempted automatically.
+    """
+    target_elements: list[str] | None = None
+    if css_selector is None and article_body:
+        selector = article_selector_for_url(url)
+        if selector:
+            target_elements = [selector]
+
+    logger.debug("fetch start", url=url, css_selector=css_selector, target_elements=target_elements)
+    page = await _fetch_with_retries(url, _make_cfg(css_selector, target_elements))
+
+    if (css_selector or target_elements) and page.success and not page.markdown:
+        logger.warning("scoped fetch returned empty markdown, retrying full page", url=url)
+        page = await _fetch_with_retries(url, _RUN_CFG)
+
+    return page

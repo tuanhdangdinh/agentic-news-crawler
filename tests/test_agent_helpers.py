@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.agent import (  # noqa: E501
+from src.agent import (
     AgentConfig,
     _allowed,
     _canonical,

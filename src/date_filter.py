@@ -132,11 +132,35 @@ def detect_page_date(page: PageResult) -> date | None:
         except Exception:  # noqa: BLE001
             pass
 
-    # Vietnamese news URL pattern: /slug-1[88]YYMMDDHHMMSSID.chn
-    m = re.search(r"1\d{2}(\d{2})(\d{2})(\d{2})\d+\.chn", page.final_url)
+    return detect_url_date(page.final_url)
+
+
+def detect_url_date(url: str) -> date | None:
+    """Extract a publish date embedded in a Vietnamese news article URL.
+
+    Handles two common encodings:
+        - CafeF: ``/slug-1NNyyMMddHHmmssID.chn`` (2-digit year after a 1NN prefix)
+        - TuoiTre / generic: ``/slug-yyyyMMddHHmmssID.htm`` (4-digit year)
+
+    Args:
+        url: Article URL to inspect.
+
+    Returns:
+        Detected date, or None when the URL carries no recognisable date.
+    """
+    # CafeF: 1NN prefix then 2-digit year, month, day
+    m = re.search(r"-1\d{2}(\d{2})(\d{2})(\d{2})\d+\.chn$", url)
     if m:
         try:
             return date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+
+    # TuoiTre / generic: 4-digit year, month, day before a long id and .htm(l)
+    m = re.search(r"-(\d{4})(\d{2})(\d{2})\d{6,}\.html?$", url)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
 

@@ -80,6 +80,12 @@ def test_detect_page_date_from_cafef_url_pattern():
     assert detect_page_date(page) == date(2026, 6, 3)
 
 
+def test_detect_page_date_from_tuoitre_url_pattern():
+    page = _page(url="https://tuoitre.vn/lg-innotek-hai-phong-20260604161445695.htm")
+    page.final_url = page.url
+    assert detect_page_date(page) == date(2026, 6, 4)
+
+
 def test_detect_page_date_returns_none_when_no_signal():
     page = _page(url="https://cafef.vn/category")
     assert detect_page_date(page) is None

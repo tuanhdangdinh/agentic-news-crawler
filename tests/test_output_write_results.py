@@ -1,4 +1,4 @@
-"""Tests for src/output.py — write_results, write_json, write_jsonl."""
+"""Tests for src/output.py — write_results."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import logging
 
 from src.models import PageResult
-from src.output import write_json, write_jsonl, write_results
+from src.output import write_results
 
 
 def _page(success: bool = True, title: str = "Test") -> PageResult:
@@ -22,10 +22,6 @@ def _page(success: bool = True, title: str = "Test") -> PageResult:
         error=None if success else "fetch failed",
     )
 
-
-# ---------------------------------------------------------------------------
-# write_results
-# ---------------------------------------------------------------------------
 
 def test_write_results_json_produces_valid_json(tmp_path):
     path = str(tmp_path / "out.json")
@@ -73,60 +69,6 @@ def test_write_results_json_empty_pages(tmp_path):
     assert data["meta"]["total_pages"] == 0
     assert data["pages"] == []
 
-
-# ---------------------------------------------------------------------------
-# write_json
-# ---------------------------------------------------------------------------
-
-def test_write_json_meta_fields_present(tmp_path):
-    path = str(tmp_path / "out.json")
-    write_json([_page(), _page(success=False)], path)
-    meta = json.loads((tmp_path / "out.json").read_text())["meta"]
-    assert "generated_at" in meta
-    assert meta["total_pages"] == 2
-    assert meta["successful"] == 1
-    assert meta["failed"] == 1
-
-
-def test_write_json_successful_plus_failed_equals_total(tmp_path):
-    path = str(tmp_path / "out.json")
-    pages = [_page(success=True), _page(success=True), _page(success=False)]
-    write_json(pages, path)
-    meta = json.loads((tmp_path / "out.json").read_text())["meta"]
-    assert meta["successful"] + meta["failed"] == meta["total_pages"]
-
-
-def test_write_json_run_meta_merged(tmp_path):
-    path = str(tmp_path / "out.json")
-    write_json([_page()], path, run_meta={"seed_url": "https://cafef.vn", "finish_reason": "done"})
-    meta = json.loads((tmp_path / "out.json").read_text())["meta"]
-    assert meta["seed_url"] == "https://cafef.vn"
-    assert meta["finish_reason"] == "done"
-
-
-# ---------------------------------------------------------------------------
-# write_jsonl
-# ---------------------------------------------------------------------------
-
-def test_write_jsonl_line_count_matches_pages(tmp_path):
-    path = str(tmp_path / "out.jsonl")
-    pages = [_page(), _page(), _page()]
-    write_jsonl(pages, path)
-    lines = (tmp_path / "out.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == len(pages)
-
-
-def test_write_jsonl_each_line_is_valid_json(tmp_path):
-    path = str(tmp_path / "out.jsonl")
-    write_jsonl([_page(), _page(success=False)], path)
-    for line in (tmp_path / "out.jsonl").read_text(encoding="utf-8").strip().splitlines():
-        record = json.loads(line)
-        assert "url" in record
-
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 
 def test_write_results_logs_nothing_on_success(tmp_path, caplog):
     path = str(tmp_path / "out.json")

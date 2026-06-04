@@ -7,6 +7,7 @@
 - Rev 2 (2026-06-03): five bugs found and fixed during smoke test — markdown code fence stripping, schema inferred once, nullable properties, auto-extraction fallback, article body truncation
 - Rev 3 (2026-06-04): `PageResult` moved from `src/crawler.py` to `src/models/page.py` — all modules import via `from src.models import PageResult`
 - Rev 4 (2026-06-04): logging migrated from stdlib to structlog with JSON output; `src/logging_config.py` added
+- Rev 5 (2026-06-04): extraction hardened — snake_case schema keys, recursive nullable, title/date header injection, and article-body scoping that strips sidebar noise without truncation
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/26e7bbf2c8a2c333e5314be701bbab7cfeec602f)
 
@@ -74,7 +75,7 @@ flowchart TD
 
 ### Design Decisions
 
-- **Never raises** — both `extract()` and `infer_schema()` return a dict in all cases; failures return `{"error": "...", "raw": "..."}` so per-page extraction errors do not abort the crawl
+- **Never raises** — both `extract()` and `infer_schema()` return a dict in all cases; `extract()` failures return `{"error": "...", "raw": "..."}`, while `infer_schema()` failures fall back to an empty schema `{"type": "object", "properties": {}}` — so per-page extraction errors never abort the crawl
 - **Schema inference as fallback** — when `schema=None`, `infer_schema()` is called automatically; user does not need to supply a schema to get structured output
 - **Validation with `jsonschema`** — Claude output is parsed as JSON then validated against the schema; both parse errors and schema violations are caught and surfaced as error dicts
 - **Extraction stored in `page.metadata`** — result attached to `page.metadata["extracted"]` or `page.metadata["extraction_error"]`; no new fields added to `PageResult`
@@ -87,10 +88,12 @@ async def infer_schema(prompt: str) -> dict
 
 - Renders `prompts/infer_schema.j2` with the user's extract prompt
 - Asks Claude to generate a JSON Schema (draft-07) with `type: object` and a `properties` block
+- Template requires snake_case property names (Rev 5) — without it the inferred schema mixed `publishDate` and `publish_date` across pages, producing an inconsistent dataset
 - Falls back to `{"type": "object", "properties": {}}` if Claude's response cannot be parsed as JSON
-- Post-processes the returned schema before returning:
+- Post-processes the returned schema via `_make_nullable` before returning:
   - Strips `required` — prevents validation failure when a field is absent in an article
   - Converts each property's `type` from `"string"` → `["string", "null"]` — prevents `None is not of type 'string'` validation errors when Claude returns null for a missing field
+  - Recurses into nested `properties` and array `items` (Rev 5) — a null inside an array-of-objects field (e.g. `key_financial_figures[].label`) previously failed validation because only top-level types were made nullable
 - Strips markdown code fences (` ```json ... ``` `) that Claude sometimes adds despite instructions
 
 ### `extract`
@@ -101,7 +104,9 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 
 - Returns `{"error": "page has no markdown content", "raw": ""}` immediately if `page.markdown` is empty
 - Calls `infer_schema(prompt)` when `schema` is `None`
-- Renders `prompts/extract.j2` with `markdown`, `prompt`, and `schema`
+- Prepends a title + publish-date header to the markdown before extraction (Rev 5) — `# {page.title}` plus `Published: {detect_page_date(page)}`; both the H1 and the date live outside the scoped article body, so without this injection Claude returns `null` for title and date on article-body fetches
+- Uses `detect_page_date` (from `src/date_filter.py`) as the single source of truth for the date — metadata, then header, then URL pattern — so the date is correct even when the page exposes no date meta tag
+- Renders `prompts/extract.j2` with `markdown`, `prompt`, and `schema_json`
 - Parses Claude's response as JSON; returns error dict on `JSONDecodeError`
 - Validates parsed JSON against schema; returns error dict on `ValidationError`
 - Returns validated extraction dict on success
@@ -109,6 +114,7 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 **Private helpers:**
 - `_validate` — wraps `jsonschema.validate`, returns `(bool, error_message)`
 - `_strip_fences` — removes ` ```json ``` ` or ` ``` ``` ` wrappers Claude sometimes adds to JSON responses
+- `_make_nullable` (Rev 5) — recursively marks every typed field nullable, descending into nested `properties` and array `items`
 
 ---
 
@@ -121,13 +127,14 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 | Variable | Source | Description |
 |---|---|---|
 | `prompt` | `AgentConfig.extract_prompt` or tool input | What fields to extract |
-| `schema` | `AgentConfig.extract_schema` or inferred | JSON Schema for output validation |
-| `markdown` | `page.markdown` | Page content — truncated to 12,000 chars |
+| `schema_json` | `AgentConfig.extract_schema` or inferred, JSON-encoded | JSON Schema for output validation |
+| `markdown` | title/date header + `page.markdown` | Page content — truncated to 12,000 chars |
 
 - Instructs Claude to respond with raw JSON only — no code fences, no explanation
 - Schema shown inline so Claude's output matches the expected structure
 - Explicitly instructs Claude to extract from the **main article body only** — ignore navigation, sidebars, related-article teasers, social buttons, and footer; set fields to `null` when not found in the main article
-- Truncation raised from 6,000 → 12,000 chars: on CafeF article pages the main article H1 starts at ~6,400 chars due to the sidebar news ticker, so 6,000 chars cut off before the article body began
+- Instructs Claude to use the exact property names from the schema (Rev 5) — a second guard against key drift, complementing snake_case enforcement in `infer_schema.j2`
+- Truncation raised from 6,000 → 12,000 chars: on CafeF article pages the main article H1 starts at ~6,400 chars due to the sidebar news ticker, so 6,000 chars cut off before the article body began; with article-body scoping (Rev 5, see `src/crawler.py`) the markdown is now ~2,500–4,500 chars and truncation rarely triggers
 
 ### `prompts/infer_schema.j2`
 
@@ -139,6 +146,7 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 
 - Instructs Claude to generate a minimal JSON Schema — only fields mentioned in the prompt
 - Requires `type: object` and a `properties` block at minimum
+- Requires snake_case property names (Rev 5) — keeps field naming consistent across every article in a run
 
 ---
 
@@ -153,8 +161,8 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
     "input_schema": {
         "type": "object",
         "properties": {
-            "prompt": {"type": "string"},
-            "schema": {"type": "object"},
+            "prompt": {"type": "string", "description": "What fields to extract"},
+            "schema": {"type": "object", "description": "Optional JSON Schema to validate output"},
         },
         "required": ["prompt"],
     },
@@ -169,6 +177,8 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 ### Schema Inferred Once Per Run
 
 `infer_schema` is called **once** in `run_agent` before the crawl loop starts, when `extract_prompt` is set and `extract_schema` is `None`. The inferred schema is stored back into `config.extract_schema` and reused for every article page.
+
+A second inference path exists in the `extract` tool itself (`_execute_tool`): if Claude invokes `extract` with no schema and `config.extract_schema` is still `None` (e.g. `--extract-prompt` was not set, so the pre-loop inference did not run), it infers once and caches the result back into `config.extract_schema` — so subsequent pages still share one schema.
 
 Previous behaviour: `infer_schema` was called per page inside `extractor.extract()`, producing a different schema on each call — camelCase field names on one page, snake_case on another, making the output dataset inconsistent across pages.
 
@@ -229,7 +239,7 @@ uv run python main.py https://cafef.vn \
   --output output.json
 ```
 
-**Actual output (2026-06-03, after fixes):**
+**Actual output (2026-06-03, after fixes; pre-Rev 5 — full-page markdown before article-body scoping, hence the 10k–14k char sizes):**
 
 ```
 [crawl-tool] seed=https://cafef.vn  depth=1  max_pages=5
@@ -263,15 +273,26 @@ uv run python main.py https://cafef.vn \
 | Depth in metadata | Each page has `metadata.depth` | ✓ — depth 0 for seed, 1 for articles |
 | No markdown fence errors | JSON parsed correctly | ✓ — `_strip_fences` handles wrapped responses |
 
+**Rev 5 re-verification (2026-06-04):** same command with `--extract-prompt "extract title, publish date, mentioned companies, stock tickers, and key financial figures"`, run across CafeF, TuoiTre, and VnEconomy.
+
+| Check | Expected | Actual |
+|---|---|---|
+| Consistent snake_case keys | `publish_date`, not mixed `publishDate` | ✓ — snake_case on every page across all three sites |
+| Nested null allowed | `key_financial_figures[].label = null` validates | ✓ — recursive `_make_nullable` accepts nested nulls |
+| Title populated under article-body scoping | `title` non-null even though H1 is outside the body | ✓ — header injection supplies `# {page.title}` |
+| Publish date populated | `publish_date` resolved without a date meta tag | ✓ — `2026-06-04` from URL pattern (CafeF/TuoiTre), body text (VnEconomy) |
+| Full-page links preserved | Article fetch keeps nav links for the frontier | ✓ — 56/179/116 internal links via `target_elements` scoping |
+
 ---
 
 ## Known Limitations
 
-- **One Claude call per extraction** — `extract()` creates a new `AsyncAnthropic` client per call; a shared client passed through from `run_agent` would be cleaner; deferred to Week 5 cleanup
-- **Schema inference quality** — inferred schemas are minimal; field naming (camelCase vs snake_case) varies across Claude responses; user-supplied schemas via `--extract-schema` are always more reliable
+- **One Claude call per extraction** — `extract()` creates a new `AsyncAnthropic` client per call; a shared client passed through from `run_agent` would be cleaner; still deferred
+- **~~Schema inference quality~~** — RESOLVED (Rev 5): snake_case enforcement in `infer_schema.j2` plus an exact-key instruction in `extract.j2` keep field naming consistent across pages; recursive `_make_nullable` removes the nested-null validation failures; user-supplied schemas via `--extract-schema` remain the most reliable for a fixed contract
 - **No retry on extraction failure** — if Claude returns malformed JSON, the error is recorded and the page moves on; no retry attempt; acceptable at MVP scope
-- **Extraction not date-filtered** — pages outside the date range are still extracted; date filtering comes in Week 5
-- **Sidebar dominates early markdown** — CafeF article body starts at ~6,400 chars due to a news ticker sidebar; extraction truncation raised to 12,000 chars as a workaround; a proper fix (H1-slice or `trafilatura`) is deferred to Week 5
+- **~~Extraction not date-filtered~~** — RESOLVED (Week 5): the agent loop drops article pages outside the date range before extraction; see the Week 5 report
+- **~~Sidebar dominates early markdown~~** — RESOLVED (Rev 5): article-body scoping via Crawl4AI `target_elements` (per-domain selector map in `src/crawler.py`) returns ~2,500–4,500 chars of clean article body, cutting 60–82% of tokens, while keeping head metadata (title, date) and full-page links intact; the 12,000-char truncation now rarely triggers
+- **Publish date precision** — `detect_page_date` resolves date only (no time); adequate for a publish-date field but not for intraday ordering
 
 ---
 
@@ -282,6 +303,8 @@ No new dependencies added in Week 4. `jsonschema` and `pydantic` were already in
 ---
 
 ## Week 5 Entry Criteria
+
+This checklist is the original Week-4 forecast and is kept as a historical snapshot — the unchecked items were delivered in Week 5 and are tracked in the Week 5 report, not back-checked here. (The Rev 5 amendments above are later additions noting where Week 5 work resolved Week 4 limitations.)
 
 - [x] `extract()` returns structured dict from a real CafeF article page
 - [x] `infer_schema()` returns a valid JSON Schema from a natural-language prompt
