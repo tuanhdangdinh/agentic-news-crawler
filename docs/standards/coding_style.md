@@ -57,8 +57,17 @@
 ## Naming and Structure
 
 - Constants: `UPPER_SNAKE_CASE` at module level — no magic numbers inline
-- One concern per module — `crawler.py` fetches, `agent.py` decides, `extractor.py` extracts
+- One concern per module — `crawler.py` fetches, `agent.py` decides, `extractor.py` extracts, `src/models/` holds shared domain types
 - Add helper abstractions only when they clarify a boundary, reduce real duplication, or isolate external APIs
+
+---
+
+## Modular Design
+
+- Shared domain types belong in `src/models/` when they represent crawler-wide concepts, not in the module that first created them
+- Cross-module reuse is a signal to extract a type, but ownership should follow the domain boundary rather than a fixed usage count
+- Modules should depend on stable public interfaces; avoid making consumers import implementation details from sibling modules
+- Re-export intentionally public package APIs from `__init__.py`, but keep internal helpers private to their modules
 
 ---
 

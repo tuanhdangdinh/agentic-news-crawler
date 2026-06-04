@@ -8,6 +8,7 @@
 - Rev 3: smoke test run and results recorded — all acceptance criteria passed
 - Rev 4: `AgentConfig` and `CrawlState` migrated from `@dataclass` to Pydantic `BaseModel`; `tokens_used` changed to `@computed_field`
 - Rev 5: two bugs found and fixed during re-run — (1) premature `finish` when reachable URLs remained in frontier; (2) stale articles collected because Claude lacked today's date
+- Rev 6: `CrawlState` gained `stop_reason`, `article_pages`, `frontier_at_finish` fields to support finish guard and output metadata; `_parse_min_articles` and `_is_article_page` private helpers added
 
 ---
 
@@ -197,6 +198,9 @@ class CrawlState(BaseModel):
     total_output_tokens: int = 0
     finished: bool = False
     finish_reason: str = ""
+    stop_reason: str = ""               # "agent_finish" | "max_pages" | "token_budget" | "frontier_empty"
+    article_pages: list[str] = Field(default_factory=list)     # URLs classified as article pages
+    frontier_at_finish: list[str] = Field(default_factory=list)  # remaining URLs when crawl stopped
 
     model_config = {"arbitrary_types_allowed": True}
 

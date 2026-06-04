@@ -28,12 +28,12 @@ No functions implemented. Week 1 deliverables are configuration files only.
 
 ## Week 2 — `src/crawler.py` + `src/output.py`
 
-### `src/crawler.py`
+### `src/models/page.py`
 
-#### `PageResult` (dataclass)
+#### `PageResult` (Pydantic BaseModel)
 
-- Stable boundary between the crawl library and the rest of the project
-- All other modules depend on this type — never import Crawl4AI outside `crawler.py`
+- Shared domain type used by every module — import via `from src.models import PageResult`
+- Defined in `src/models/` so it is decoupled from the fetch implementation; never import Crawl4AI outside `crawler.py`
 
 | Field | Type | Description |
 |---|---|---|
@@ -47,8 +47,12 @@ No functions implemented. Week 1 deliverables are configuration files only.
 | `links_internal` | `list[str]` | Same-domain links as plain URL strings |
 | `links_external` | `list[str]` | Off-domain links as plain URL strings |
 | `metadata` | `dict` | All page metadata (OG tags, JSON-LD, etc.) |
+| `fetch_time` | `float \| None` | Fetch duration in seconds |
+| `headers` | `dict` | HTTP response headers — used by `detect_page_date` for `Last-Modified` |
 | `success` | `bool` | False if fetch failed for any reason |
 | `error` | `str \| None` | Error message when success=False |
+
+### `src/crawler.py`
 
 #### `fetch_page`
 
@@ -198,7 +202,7 @@ def render(template_name: str, **context: object) -> str
 
 ### `src/agent.py`
 
-#### `AgentConfig` (dataclass)
+#### `AgentConfig` (Pydantic BaseModel)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -211,7 +215,9 @@ def render(template_name: str, **context: object) -> str
 | `exclude_patterns` | `list[str]` | `[]` | Glob patterns that block a URL |
 | `model` | `str` | `"claude-sonnet-4-6"` | Anthropic model ID |
 
-#### `CrawlState` (dataclass)
+Week 4 adds `extract_prompt` and `extract_schema`. Week 5 adds `date_filter` and `include_undated` — see those sections.
+
+#### `CrawlState` (Pydantic BaseModel)
 
 | Field | Type | Description |
 |---|---|---|
@@ -222,6 +228,9 @@ def render(template_name: str, **context: object) -> str
 | `total_output_tokens` | `int` | Cumulative output tokens |
 | `finished` | `bool` | Set True when agent calls `finish` tool |
 | `finish_reason` | `str` | Agent's stated reason for finishing |
+| `stop_reason` | `str` | Machine-readable stop: `"agent_finish"`, `"max_pages"`, `"token_budget"`, `"frontier_empty"` |
+| `article_pages` | `list[str]` | URLs classified as article pages — used to enforce min-article goals |
+| `frontier_at_finish` | `list[str]` | Frontier URLs remaining when crawl stopped — preserved in output metadata |
 
 | Property | Returns | Description |
 |---|---|---|
@@ -270,6 +279,8 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState
 - `_allowed` — returns whether a URL passes same-domain and include/exclude pattern guardrails
 - `_canonical` — removes URL fragments before deduplication
 - `_same_domain` — checks whether two URLs have the same network location
+- `_parse_min_articles` — extracts numeric minimum article count from the goal string (e.g. `"at least 3 articles"` → `3`)
+- `_is_article_page` — returns True when page metadata (`article:published_time`) or URL pattern (`/slug-NNNNNNNNN.chn`) indicates an article
 
 ---
 
@@ -344,6 +355,10 @@ async def infer_schema(prompt: str) -> dict
 - `_execute_tool` updated to handle `extract` — calls `src/extractor.extract()`, attaches result to `page` record
 - `system.j2` updated to include `extract_prompt` variable when provided
 - Per-page extraction errors stored in page record, do not abort the loop
+- `AgentConfig` gains `extract_prompt: str = ""` and `extract_schema: dict | None = None`
+- `CrawlState` gains `stop_reason`, `article_pages`, `frontier_at_finish` to support the finish guard and output metadata
+- New private helpers: `_parse_min_articles` (goal → min count), `_is_article_page` (URL/metadata classifier)
+- `finish` tool guard added to `_execute_tool`: rejected when reachable URLs remain in frontier or min-article target not met
 
 **New tool:**
 
@@ -367,7 +382,7 @@ async def infer_schema(prompt: str) -> dict
 #### `parse_date_filter`
 
 ```python
-def parse_date_filter(prompt: str) -> tuple[date, date]
+def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, date]
 ```
 
 **Arguments:**
@@ -375,16 +390,17 @@ def parse_date_filter(prompt: str) -> tuple[date, date]
 | Argument | Type | Description |
 |---|---|---|
 | `prompt` | `str` | User-provided date expression, such as `"last 7 days"` or `"since 2026-01-01"`. |
+| `today` | `date \| None` | Override for the current date — used in tests to fix the reference point. |
 
 - Converts a user-provided date filter into an inclusive `(from_date, to_date)` range
-- Supports phrases such as `"last 7 days"`, `"since 2026-01-01"`, `"between Jan and Mar 2026"`, and `"this quarter"`
-- Uses `dateparser` for natural-language parsing where appropriate
+- Supported patterns: `"last N days/weeks/months"`, `"last week/month/year"`, `"this week/month/year"`, `"today"`, `"yesterday"`, `"since YYYY-MM-DD"`, `"between YYYY-MM-DD and YYYY-MM-DD"`, `"YYYY-MM-DD"`
+- `"since YYYY-MM-DD"` treats today as the upper bound — returns `(parsed_date, today)`
 - Raises `ValueError` for empty, ambiguous, or unparseable input instead of guessing
 
 **Test cases:**
 - `parse_date_filter("last 7 days")` → `to_date == today`, `from_date == today - 7 days`
-- `parse_date_filter("since 2026-01-01")` → `from_date == date(2026, 1, 1)`
-- `parse_date_filter("this quarter")` → returns a valid `(from_date, to_date)` range
+- `parse_date_filter("since 2026-01-01")` → `from_date == date(2026, 1, 1)`, `to_date == today`
+- `parse_date_filter("this month")` → `from_date == first day of current month`, `to_date == today`
 - `parse_date_filter("sometime recently")` → raises `ValueError`
 - `parse_date_filter("")` → raises `ValueError`
 
@@ -404,7 +420,8 @@ def detect_page_date(page: PageResult) -> date | None
 - Checks date signals in priority order:
   1. `<meta>` tags — `article:published_time`, `og:updated_time`
   2. JSON-LD — `datePublished`, `dateModified`
-  3. HTTP `Last-Modified` header (lowest priority)
+  3. HTTP `Last-Modified` header via `page.headers` (lowest priority)
+  4. Vietnamese news URL pattern — `188YYMMDD…` embedded in the URL path
 - Returns a `date` when a valid signal is found
 - Returns `None` when the page has no usable date signal or all date strings are malformed
 
@@ -412,6 +429,7 @@ def detect_page_date(page: PageResult) -> date | None
 - Page with `article:published_time` meta tag → returns correct date
 - Page with JSON-LD `datePublished` → returns correct date
 - Page with only `Last-Modified` header → returns correct date
+- Page with Vietnamese URL pattern (`188260603...`) → returns correct date
 - Page with no date signals → returns `None`
 - Page with malformed date string in meta → returns `None`, does not raise
 
@@ -449,12 +467,22 @@ def is_in_range(
 
 ---
 
+### `src/agent.py` updates (Week 5)
+
+`AgentConfig` gains two fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `date_filter` | `str` | `""` | Natural-language date filter passed to `parse_date_filter` |
+| `include_undated` | `bool` | `True` | Whether to keep pages with no detectable date |
+
 ### `src/crawler.py` updates (Week 5) — retry policy
 
 - `fetch_page` updated with exponential backoff: max 3 retries on `5xx` or timeout
-- Respects `Retry-After` header on `429` responses
+- Reads actual `Retry-After` header value on `429` responses (falls back to 60s)
 - Each retry logged at `WARNING` level with attempt number and reason
 - After 3 failed retries returns `PageResult(success=False, error=...)` — still never raises
+- `PageResult` gains `fetch_time: float | None` and `headers: dict` fields (added alongside retry policy)
 
 ---
 

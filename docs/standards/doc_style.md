@@ -2,20 +2,165 @@
 
 ---
 
-## General Rules
+## Purpose
 
-- **Prefer bullet points** for reports, decisions, checklists, and tradeoff summaries
-- Use short paragraphs when explaining architecture or design reasoning
-- **Concise** — one idea per bullet; cut filler words
-- **Easy to understand** — write for someone picking up the file cold, not the author
+This guide defines the exact format for every document type in this project.
+Follow it literally when writing or generating docs — the goal is that any two documents
+of the same type look identical in structure.
+
+---
+
+## Markdown Formatting Rules
+
+Apply these rules to every document without exception:
+
+- One blank line before and after every heading, list, table, code fence, and `---`
+- `---` separates top-level `##` sections only — never between `###` subsections
+- Heading levels must be sequential — never jump from `##` to `####`
+- Nested list items use two-space indentation
+- Every code block carries a language tag — ` ```python `, ` ```bash `, ` ```json `, ` ```mermaid `
+- Table columns align with `|---|---|` (no padding spaces in the separator row)
+
+---
+
+## Document Header
+
+Every document begins with this block — no content before it:
+
+```markdown
+# <Title>
+
+**Prepared:** YYYY-MM-DD
+
+**Revision history:**
+- Initial draft: <one-line description>
+- Rev 2: <what changed>
+```
+
+Rules:
+
+- `**Prepared:**` is the date the initial draft was written — never updated
+- Each revision is one line: `- Rev N (YYYY-MM-DD): <what changed>` for revisions after the initial draft
+- The initial draft line has no date prefix
+- No other metadata fields in the header block
+
+---
+
+## Weekly Report Structure
+
+Use this section order exactly — do not add, remove, or rename sections:
+
+```
+# Week N <Type> Report — <Short Title>
+**Prepared:** ...
+**Revision history:** ...
+---
+## Overview
+### What Week N Builds
+### What Changed From Week N-1
+### Data Flow This Week
+    ```mermaid ...```
+### This Report
+---
+## Objective
+---
+## Module: `src/<file>.py`
+### Design Decisions
+### Public Interface
+---
+## Smoke Test
+---
+## Known Limitations
+---
+## Dependency Changes
+---
+## Week N+1 Entry Criteria
+```
+
+Section rules:
+
+- **Overview / What Week N Builds** — 2–4 bullets; what problem this week solves
+- **Overview / What Changed From Week N-1** — bullet per file changed; format: `filename — old state → new state`
+- **Overview / Data Flow This Week** — one Mermaid `flowchart TD` diagram; nodes labelled with filename and role
+- **Overview / This Report** — one sentence stating the report's scope
+- **Objective** — bullet list of concrete deliverables; each bullet is a verb phrase
+- **Module** — one `## Module:` section per file implemented; contains Design Decisions then Public Interface
+- **Smoke Test** — command block, actual output block, acceptance criteria table
+- **Known Limitations** — bullet per limitation; each ends with when it will be addressed
+- **Dependency Changes** — table with columns `Change | Reason`; write `No new dependencies` if none
+- **Week N+1 Entry Criteria** — checklist; `- [x]` for done, `- [ ]` for not done
+
+Research-only weeks replace **Module** and **Smoke Test** with:
+
+```
+## Sources Checked
+## Comparison Matrix
+## Decision
+## Risks and Mitigations
+```
+
+---
+
+## Module Section Format
+
+Each `## Module:` section follows this structure:
+
+```markdown
+## Module: `src/<file>.py`
+
+### Design Decisions
+
+- Decision 1 — reason
+- Decision 2 — reason
+
+### Public Interface
+
+\`\`\`python
+def function_name(arg: type) -> ReturnType
+\`\`\`
+
+- Bullet describing behaviour
+- Edge case or failure mode
+```
+
+Rules:
+
+- Design Decisions come before Public Interface — always
+- Each design decision bullet states the decision and the reason separated by ` — `
+- Public Interface shows the signature in a code block, then behaviour bullets below it
+
+---
+
+## Acceptance Criteria Table
+
+Every smoke test section contains this table:
+
+```markdown
+| Check | Expected | Actual |
+|---|---|---|
+| <what is verified> | <expected value or behaviour> | <actual result and pass/fail symbol> |
+```
+
+- Pass: append ` ✓`
+- Fail: append ` ✗` and add a follow-up note
+
+---
+
+## Diagrams
+
+- Use Mermaid for all data flow diagrams — `flowchart TD` for top-down, `flowchart LR` for left-right
+- One diagram per report, placed in **Overview / Data Flow This Week**
+- Every node label contains the filename and its role, separated by `<br>`
+
+```
+CLI["main.py <br> CLI entry point"]
+```
 
 ---
 
 ## Docstrings
 
-- Google style on every public function and class
-- One-line summary first, then Args and Returns sections
-- Args and Returns use short descriptions — not essays
+Google style on every public function and class:
 
 ```python
 def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
@@ -30,64 +175,59 @@ def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
     """
 ```
 
----
+Rules:
 
-## Weekly Report Structure
-
-Each weekly report follows this order:
-
-1. **Header** — title, date, revision history
-2. **Overview** — what this week builds, what changed from last week, data flow diagram, report scope
-3. **Objective** — bullet list of deliverables
-4. **Modules** — one section per file; design decisions + public interface
-5. **Smoke Test** — command, actual output, acceptance criteria table
-6. **Known Limitations** — what is deferred and why
-7. **Week N+1 Entry Criteria** — checklist of done vs. not-done items
-
-Research-only weeks may replace **Modules** and **Smoke Test** with:
-
-- **Sources Checked**
-- **Comparison Matrix**
-- **Decision**
-- **Risks and Mitigations**
-
----
-
-## Diagrams
-
-- Use Mermaid for all data flow diagrams — `flowchart TD` or `flowchart LR`
-- One diagram per report in the Overview section
-- Label each node with the file name and its role
+- One-line summary first — ends with a period
+- Blank line between summary and Args
+- Args and Returns: short phrase per item, not sentences
+- No Raises section unless the function deliberately raises as part of its contract
 
 ---
 
 ## Tables
 
-- Use tables for: CLI flags, acceptance criteria, dependency changes, variable reference lists
-- Keep cell content short — one phrase, not a sentence
+Use a table when the content has two or more attributes per item. Common patterns:
+
+| Table type | Required columns |
+|---|---|
+| CLI flags | `Flag \| Default \| Description` |
+| Acceptance criteria | `Check \| Expected \| Actual` |
+| Dependency changes | `Change \| Reason` |
+| Comparison matrix | one column per option, one row per criterion |
+| Module field reference | `Field \| Type \| Description` |
+
+Cell content: one phrase — not a full sentence, not a paragraph.
 
 ---
 
 ## Revision History
 
-- One line per meaningful change at the top of each report
-- Format: `- Rev N: short description of what changed`
+```markdown
+**Revision history:**
+- Initial draft: <one-line summary of what the initial draft covered>
+- Rev 2 (YYYY-MM-DD): <what changed and why>
+- Rev 3 (YYYY-MM-DD): <what changed and why>
+```
+
+- Revision numbers are sequential integers starting at 2 (the initial draft is not numbered)
+- Each revision line is one sentence maximum
+- Historical reports must not be rewritten — add a revision entry instead
 
 ---
 
 ## Sources
 
-- Link official docs, GitHub repos, PyPI pages, or primary papers
-- Separate verified facts from recommendations
-- Include version or prepared date when library APIs are unstable
-- Avoid unsourced claims about library behavior
+- Link official docs, GitHub repos, PyPI pages, or primary papers — no bare domain names
+- Label each source: `[Library name — official docs](url)`
+- Separate verified facts from recommendations explicitly
+- Include the library version when the API is version-sensitive
 
 ---
 
 ## Commit Messages
 
-- Use **Conventional Commits** format: `type(scope): summary`
+- Format: `type: summary` — Conventional Commits, no scope required unless helpful
 - Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`
-- Keep the subject under 72 characters
-- Prefer intent over file-by-file summaries
-- No trailing summaries like "this commit adds..." or "changed X to Y"
+- Subject line under 72 characters
+- No body paragraph — reasoning belongs in the PR description or report
+- No `Co-Authored-By` trailer

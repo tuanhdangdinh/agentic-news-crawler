@@ -5,6 +5,7 @@
 **Revision history:**
 - Initial draft: extractor module, prompt templates, extract tool in agent, CLI wiring, Pydantic migration
 - Rev 2 (2026-06-03): five bugs found and fixed during smoke test — markdown code fence stripping, schema inferred once, nullable properties, auto-extraction fallback, article body truncation
+- Rev 3 (2026-06-04): `PageResult` moved from `src/crawler.py` to `src/models/page.py` — all modules import via `from src.models import PageResult`
 
 ---
 
@@ -198,9 +199,9 @@ All three data models migrated from `@dataclass` to Pydantic `BaseModel`:
 
 | Model | File | Key change |
 |---|---|---|
-| `PageResult` | `src/crawler.py` | `@dataclass` → `BaseModel`; `Field(default_factory=...)` |
+| `PageResult` | `src/models/page.py` | `@dataclass` → `BaseModel`; moved to `src/models/` package so it is decoupled from the crawler implementation |
 | `AgentConfig` | `src/agent.py` | `@dataclass` → `BaseModel`; `Field(default_factory=...)` |
-| `CrawlState` | `src/agent.py` | `@dataclass` → `BaseModel`; `@property tokens_used` → `@computed_field`; `model_config = {"arbitrary_types_allowed": True}` for `set[str]` |
+| `CrawlState` | `src/agent.py` | `@dataclass` → `BaseModel`; `@property tokens_used` → `@computed_field`; `model_config = {"arbitrary_types_allowed": True}` for `set[str]`; new fields: `stop_reason`, `article_pages`, `frontier_at_finish` |
 
 **`src/output.py`:** `dataclasses.asdict(page)` + manual field removal → `page.model_dump(exclude={"html", "raw_markdown"})` — cleaner and Pydantic-native.
 
