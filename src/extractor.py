@@ -9,7 +9,7 @@ import re
 import anthropic
 import jsonschema
 
-from src.crawler import PageResult
+from src.models import PageResult
 from src.prompts import render
 
 logger = logging.getLogger(__name__)

@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.crawler import PageResult
 from src.extractor import extract, infer_schema
+from src.models import PageResult
 
 
 def _page(markdown: str = "Article about GDP growth in Vietnam") -> PageResult:

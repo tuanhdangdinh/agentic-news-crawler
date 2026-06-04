@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-from pydantic import BaseModel, Field
+
+from src.models import PageResult
 
 logger = logging.getLogger(__name__)
 
@@ -20,23 +23,6 @@ _RUN_CFG = CrawlerRunConfig(
         content_filter=PruningContentFilter(threshold=0.6)
     ),
 )
-
-
-class PageResult(BaseModel):
-    """Normalised output of a single page fetch."""
-
-    url: str
-    final_url: str
-    status_code: int | None
-    title: str | None
-    markdown: str
-    raw_markdown: str | None = None
-    html: str | None = None
-    links_internal: list[str] = Field(default_factory=list)
-    links_external: list[str] = Field(default_factory=list)
-    metadata: dict = Field(default_factory=dict)
-    success: bool = True
-    error: str | None = None
 
 
 def _extract_links(links_dict: dict) -> tuple[list[str], list[str]]:
@@ -69,60 +55,89 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
         )
 
     logger.debug("fetch start: %s", url)
+    max_retries = 3
 
-    try:
-        async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
-            result = await crawler.arun(url=url, config=cfg)
+    for attempt in range(max_retries):
+        t0 = time.monotonic()
+        try:
+            async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
+                result = await crawler.arun(url=url, config=cfg)
+            fetch_time = round(time.monotonic() - t0, 2)
 
-        if not result.success:
-            logger.warning("fetch failed: %s — status=%s error=%s", url, result.status_code, result.error_message)
+            if not result.success:
+                status = result.status_code or 0
+
+                if status == 429:
+                    resp_hdrs = getattr(result, "response_headers", {}) or {}
+                    retry_after = int(resp_hdrs.get("retry-after", resp_hdrs.get("Retry-After", 60)))
+                    logger.warning("fetch 429: %s — retry-after %ds (attempt %d)", url, retry_after, attempt + 1)
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                if status >= 500 and attempt < max_retries - 1:
+                    backoff = 2 ** attempt
+                    logger.warning("fetch %d: %s — retrying in %ds (attempt %d)", status, url, backoff, attempt + 1)
+                    await asyncio.sleep(backoff)
+                    continue
+
+                logger.warning("fetch failed: %s — status=%s error=%s", url, result.status_code, result.error_message)
+                return PageResult(
+                    url=url,
+                    final_url=url,
+                    status_code=result.status_code,
+                    title=None,
+                    markdown="",
+                    fetch_time=fetch_time,
+                    success=False,
+                    error=result.error_message or "crawl failed",
+                )
+
+            md = result.markdown
+            markdown = (md.fit_markdown or md.raw_markdown) if md else ""
+            raw_markdown = md.raw_markdown if md else None
+            internal, external = _extract_links(result.links or {})
+            metadata = result.metadata or {}
+            title = metadata.get("title") or metadata.get("og:title")
+            resp_hdrs = getattr(result, "response_headers", {}) or {}
+
+            logger.info(
+                "fetch ok: %s — status=%s chars=%d links=%d time=%.2fs",
+                url, result.status_code, len(markdown), len(internal), fetch_time,
+            )
+
+            return PageResult(
+                url=url,
+                final_url=result.url,
+                status_code=result.status_code,
+                title=title,
+                markdown=markdown,
+                raw_markdown=raw_markdown,
+                html=result.html,
+                links_internal=internal,
+                links_external=external,
+                metadata=metadata,
+                headers=resp_hdrs,
+                fetch_time=fetch_time,
+                success=True,
+                error=None,
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            fetch_time = round(time.monotonic() - t0, 2)
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                logger.warning("fetch exception: %s — %s — retrying in %ds", url, exc, backoff)
+                await asyncio.sleep(backoff)
+                continue
+            logger.warning("fetch exception: %s — %s", url, exc)
             return PageResult(
                 url=url,
                 final_url=url,
-                status_code=result.status_code,
+                status_code=None,
                 title=None,
                 markdown="",
+                fetch_time=fetch_time,
                 success=False,
-                error=result.error_message or "crawl failed",
+                error=str(exc),
             )
-
-        md = result.markdown
-        markdown = (md.fit_markdown or md.raw_markdown) if md else ""
-        raw_markdown = md.raw_markdown if md else None
-
-        internal, external = _extract_links(result.links or {})
-
-        metadata = result.metadata or {}
-        title = metadata.get("title") or metadata.get("og:title")
-
-        logger.debug(
-            "fetch ok: %s — status=%s chars=%d links_internal=%d links_external=%d",
-            url, result.status_code, len(markdown), len(internal), len(external),
-        )
-
-        return PageResult(
-            url=url,
-            final_url=result.url,
-            status_code=result.status_code,
-            title=title,
-            markdown=markdown,
-            raw_markdown=raw_markdown,
-            html=result.html,
-            links_internal=internal,
-            links_external=external,
-            metadata=metadata,
-            success=True,
-            error=None,
-        )
-
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("fetch exception: %s — %s", url, exc)
-        return PageResult(
-            url=url,
-            final_url=url,
-            status_code=None,
-            title=None,
-            markdown="",
-            success=False,
-            error=str(exc),
-        )

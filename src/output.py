@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.crawler import PageResult
+from src.models import PageResult
 
 logger = logging.getLogger(__name__)
 

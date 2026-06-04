@@ -11,14 +11,15 @@ from urllib.parse import urlparse
 import anthropic
 from pydantic import BaseModel, Field, computed_field
 
-from src.crawler import PageResult, fetch_page
+from src.crawler import fetch_page
 from src.extractor import extract as extractor_extract
 from src.extractor import infer_schema
+from src.models import PageResult
 from src.prompts import render
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-sonnet-4-6"
 MAX_TOOL_TURNS_PER_PAGE = 5
 
 _NUMBER_WORDS = {
@@ -105,6 +106,8 @@ class AgentConfig(BaseModel):
     model: str = MODEL
     extract_prompt: str = ""
     extract_schema: dict | None = None
+    date_filter: str = ""
+    include_undated: bool = True
 
 
 class CrawlState(BaseModel):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from src.crawler import PageResult
+from src.models import PageResult
 from src.output import write_json, write_jsonl, write_results
 
 

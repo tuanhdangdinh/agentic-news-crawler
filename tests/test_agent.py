@@ -15,7 +15,7 @@ from src.agent import (
     _parse_min_articles,
     run_agent,
 )
-from src.crawler import PageResult
+from src.models import PageResult
 
 _INFERRED_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}}
 
