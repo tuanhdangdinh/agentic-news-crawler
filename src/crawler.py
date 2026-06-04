@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 
+import structlog
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from src.models import PageResult
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _BROWSER_CFG = BrowserConfig(browser_type="chromium", headless=True)
 
@@ -54,7 +54,7 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
             ),
         )
 
-    logger.debug("fetch start: %s", url)
+    logger.debug("fetch start", url=url)
     max_retries = 3
 
     for attempt in range(max_retries):
@@ -70,18 +70,18 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
                 if status == 429:
                     resp_hdrs = getattr(result, "response_headers", {}) or {}
                     retry_after = int(resp_hdrs.get("retry-after", resp_hdrs.get("Retry-After", 60)))
-                    logger.warning("fetch 429: %s — retry-after %ds (attempt %d)", url, retry_after, attempt + 1)
+                    logger.warning("fetch 429", url=url, retry_after=retry_after, attempt=attempt + 1)
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_after)
                         continue
 
                 if status >= 500 and attempt < max_retries - 1:
                     backoff = 2 ** attempt
-                    logger.warning("fetch %d: %s — retrying in %ds (attempt %d)", status, url, backoff, attempt + 1)
+                    logger.warning("fetch error retrying", status=status, url=url, backoff=backoff, attempt=attempt + 1)
                     await asyncio.sleep(backoff)
                     continue
 
-                logger.warning("fetch failed: %s — status=%s error=%s", url, result.status_code, result.error_message)
+                logger.warning("fetch failed", url=url, status=result.status_code, error=result.error_message)
                 return PageResult(
                     url=url,
                     final_url=url,
@@ -102,8 +102,12 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
             resp_hdrs = getattr(result, "response_headers", {}) or {}
 
             logger.info(
-                "fetch ok: %s — status=%s chars=%d links=%d time=%.2fs",
-                url, result.status_code, len(markdown), len(internal), fetch_time,
+                "fetch ok",
+                url=url,
+                status=result.status_code,
+                chars=len(markdown),
+                links=len(internal),
+                time=fetch_time,
             )
 
             return PageResult(
@@ -127,10 +131,10 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult:
             fetch_time = round(time.monotonic() - t0, 2)
             if attempt < max_retries - 1:
                 backoff = 2 ** attempt
-                logger.warning("fetch exception: %s — %s — retrying in %ds", url, exc, backoff)
+                logger.warning("fetch exception retrying", url=url, exc=str(exc), backoff=backoff)
                 await asyncio.sleep(backoff)
                 continue
-            logger.warning("fetch exception: %s — %s", url, exc)
+            logger.warning("fetch exception", url=url, exc=str(exc))
             return PageResult(
                 url=url,
                 final_url=url,

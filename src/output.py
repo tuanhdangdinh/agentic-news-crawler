@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+import structlog
+
 from src.models import PageResult
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def _page_record(page: PageResult) -> dict:
@@ -36,7 +37,7 @@ def write_json(pages: list[PageResult], path: str, run_meta: dict | None = None)
         "pages": [_page_record(p) for p in pages],
     }
     Path(path).write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.debug("wrote json: %s — %d pages", path, len(pages))
+    logger.debug("wrote json", path=path, pages=len(pages))
 
 
 def write_jsonl(pages: list[PageResult], path: str) -> None:
@@ -48,7 +49,7 @@ def write_jsonl(pages: list[PageResult], path: str) -> None:
     """
     lines = [json.dumps(_page_record(p), ensure_ascii=False) for p in pages]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.debug("wrote jsonl: %s — %d lines", path, len(pages))
+    logger.debug("wrote jsonl", path=path, lines=len(pages))
 
 
 def write_results(

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
+import structlog
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -31,5 +31,5 @@ def render(template_name: str, **context: object) -> str:
     """
     template = _env.get_template(template_name)
     result = template.render(**context)
-    logger.debug("rendered template: %s — %d chars", template_name, len(result))
+    logger.debug("rendered template", template=template_name, chars=len(result))
     return result

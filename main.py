@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 from pathlib import Path
+
+import structlog
 
 from src.agent import AgentConfig, run_agent
 from src.crawler import fetch_page
+from src.logging_config import configure_logging
 from src.output import write_results
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,8 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run(args: argparse.Namespace) -> None:
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
+    configure_logging(args.verbose)
 
     extract_schema = None
     if args.extract_schema:
@@ -87,7 +88,7 @@ async def run(args: argparse.Namespace) -> None:
             "total_output_tokens": 0,
             "finish_reason": "single page fetched",
         }
-        logger.info("writing %s output to %s", args.format, args.output)
+        logger.info("writing output", format=args.format, path=args.output)
         write_results([page], args.output, fmt=args.format, run_meta=run_meta)
         print(f"\n[crawl-tool] done — {1 if page.success else 0} pages  1 visited  0 tokens")
         if page.error:
@@ -123,7 +124,7 @@ async def run(args: argparse.Namespace) -> None:
         "frontier_at_finish": state.frontier_at_finish,
     }
 
-    logger.info("writing %s output to %s", args.format, args.output)
+    logger.info("writing output", format=args.format, path=args.output)
     write_results(state.pages, args.output, fmt=args.format, run_meta=run_meta)
     print(f"[crawl-tool] output: {args.output}")
 

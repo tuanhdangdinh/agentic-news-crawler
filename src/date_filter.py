@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from src.models import PageResult
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

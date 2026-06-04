@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import fnmatch
-import logging
 import re
 from datetime import date
 from urllib.parse import urlparse
 
 import anthropic
+import structlog
 from pydantic import BaseModel, Field, computed_field
 
 from src.crawler import fetch_page
@@ -17,7 +17,7 @@ from src.extractor import infer_schema
 from src.models import PageResult
 from src.prompts import render
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 MODEL = "claude-sonnet-4-6"
 MAX_TOOL_TURNS_PER_PAGE = 5
@@ -203,28 +203,28 @@ async def _execute_tool(
     min_articles: int = 0,
 ) -> str:
     """Execute a tool call from the agent and return a result string."""
-    logger.debug("tool call: %s inputs=%s", name, inputs)
+    logger.debug("tool call", name=name, inputs=inputs)
 
     if name == "add_to_frontier":
         if "url" not in inputs:
-            logger.warning("add_to_frontier called without url field — inputs=%s", inputs)
+            logger.warning("add_to_frontier called without url field", inputs=inputs)
             return "error: missing required field 'url'"
         url = _canonical(inputs["url"])
         next_depth = current_depth + 1
         if next_depth > config.max_depth:
-            logger.debug("guardrail: depth %d > max %d — blocked %s", next_depth, config.max_depth, url)
+            logger.debug("guardrail: depth exceeded", next_depth=next_depth, max_depth=config.max_depth, url=url)
             return f"skipped (depth {next_depth} > max {config.max_depth})"
         if url in state.visited:
-            logger.debug("guardrail: already visited — blocked %s", url)
+            logger.debug("guardrail: already visited", url=url)
             return "skipped (already visited)"
         if not _allowed(url, seed_url, config):
-            logger.debug("guardrail: pattern/domain filter — blocked %s", url)
+            logger.debug("guardrail: blocked by filter", url=url)
             return "skipped (blocked by guardrail)"
         if any(u == url for u, _ in state.frontier):
-            logger.debug("guardrail: already in frontier — skipped %s", url)
+            logger.debug("guardrail: already in frontier", url=url)
             return "skipped (already in frontier)"
         state.frontier.append((url, next_depth))
-        logger.info("frontier +%s (depth %d)", url, next_depth)
+        logger.info("frontier add", url=url, depth=next_depth)
         return f"added at depth {next_depth}"
 
     if name == "mark_visited":
@@ -235,7 +235,7 @@ async def _execute_tool(
     if name == "finish":
         reachable = [u for u, d in state.frontier if d <= config.max_depth]
         if reachable:
-            logger.info("finish rejected: %d reachable URLs still in frontier", len(reachable))
+            logger.info("finish rejected: reachable URLs in frontier", count=len(reachable))
             return (
                 f"finish rejected: {len(reachable)} URLs still in the frontier at reachable depth "
                 f"— the crawler will fetch them automatically; do not call finish yet"
@@ -244,10 +244,10 @@ async def _execute_tool(
             queued = len(state.frontier)
             collected = len(state.article_pages)
             logger.info(
-                "finish rejected: need %d article pages, have %d, queued %d",
-                min_articles,
-                collected,
-                queued,
+                "finish rejected: article count",
+                need=min_articles,
+                have=collected,
+                queued=queued,
             )
             return (
                 f"finish rejected: goal requires {min_articles} article pages, "
@@ -257,7 +257,7 @@ async def _execute_tool(
         state.finish_reason = inputs.get("reason", "")
         state.stop_reason = "agent_finish"
         state.frontier_at_finish = [u for u, _ in state.frontier]
-        logger.info("agent finished: %s", state.finish_reason)
+        logger.info("agent finished", reason=state.finish_reason)
         return "crawl terminated"
 
     if name == "extract":
@@ -267,11 +267,11 @@ async def _execute_tool(
         schema = inputs.get("schema") or config.extract_schema
         result = await extractor_extract(current_page, prompt, schema)
         if "error" in result:
-            logger.warning("extraction error on %s: %s", current_page.url, result["error"])
+            logger.warning("extraction error", url=current_page.url, error=result["error"])
             current_page.metadata["extraction_error"] = result["error"]
         else:
             current_page.metadata["extracted"] = result
-            logger.info("extracted %d fields from %s", len(result), current_page.url)
+            logger.info("extracted", fields=len(result), url=current_page.url)
         return str(result)
 
     return f"unknown tool: {name}"
@@ -331,11 +331,11 @@ async def _agent_turn(
         state.total_input_tokens += response.usage.input_tokens
         state.total_output_tokens += response.usage.output_tokens
         logger.debug(
-            "claude response: stop_reason=%s input_tokens=%d output_tokens=%d total=%d",
-            response.stop_reason,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            state.tokens_used,
+            "claude response",
+            stop_reason=response.stop_reason,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            total=state.tokens_used,
         )
 
         tool_results = []
@@ -372,7 +372,7 @@ async def _agent_turn(
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
     else:
-        logger.warning("max tool turns reached for page: %s", page.final_url)
+        logger.warning("max tool turns reached", url=page.final_url)
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
     if config.extract_prompt and config.extract_schema is None:
         logger.info("inferring extraction schema from prompt")
         config.extract_schema = await infer_schema(config.extract_prompt)
-        logger.info("inferred schema with %d properties", len(config.extract_schema.get("properties", {})))
+        logger.info("inferred schema", properties=len(config.extract_schema.get("properties", {})))
 
     system_prompt = render(
         "system.j2",
@@ -412,11 +412,11 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
     while state.frontier and not state.finished:
         # Hard budget guards
         if len(state.pages) >= config.max_pages:
-            logger.info("max_pages (%d) reached — stopping", config.max_pages)
+            logger.info("max_pages reached", max_pages=config.max_pages)
             state.stop_reason = "max_pages"
             break
         if state.tokens_used >= config.token_budget:
-            logger.info("token_budget (%d) exhausted — stopping", config.token_budget)
+            logger.info("token_budget exhausted", budget=config.token_budget)
             state.stop_reason = "token_budget"
             break
 
@@ -426,12 +426,12 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
             continue
 
         # OBSERVE — fetch the page
-        logger.info("fetching [depth=%d] %s", depth, url)
+        logger.info("fetching", depth=depth, url=url)
         page = await fetch_page(url)
         state.visited.add(url)
 
         if not page.success:
-            logger.warning("fetch failed: %s — %s", url, page.error)
+            logger.warning("fetch failed", url=url, error=page.error)
             continue
 
         page.metadata["depth"] = depth
@@ -455,14 +455,14 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
             and "extracted" not in page.metadata
             and "extraction_error" not in page.metadata
         ):
-            logger.debug("auto-extracting from %s", url)
+            logger.debug("auto-extracting", url=url)
             result = await extractor_extract(page, config.extract_prompt, config.extract_schema)
             if "error" in result:
                 page.metadata["extraction_error"] = result["error"]
-                logger.warning("extraction error on %s: %s", url, result["error"])
+                logger.warning("extraction error", url=url, error=result["error"])
             else:
                 page.metadata["extracted"] = result
-                logger.info("extracted %d fields from %s", len(result), url)
+                logger.info("extracted", fields=len(result), url=url)
 
     if not state.stop_reason:
         state.stop_reason = "agent_finish" if state.finished else "frontier_empty"

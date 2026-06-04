@@ -83,7 +83,7 @@ async def test_infer_schema_returns_fallback_on_invalid_json(caplog):
         with caplog.at_level(logging.WARNING, logger="src.extractor"):
             result = await infer_schema("extract title")
     assert result == {"type": "object", "properties": {}}
-    assert any("failed to parse" in r.message for r in caplog.records)
+    assert any("infer_schema JSON parse error" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
