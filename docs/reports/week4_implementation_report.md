@@ -9,7 +9,7 @@
 - Rev 4 (2026-06-04): logging migrated from stdlib to structlog with JSON output; `src/logging_config.py` added
 - Rev 5 (2026-06-04): extraction hardened — snake_case schema keys, recursive nullable, title/date header injection, and article-body scoping that strips sidebar noise without truncation
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/26e7bbf2c8a2c333e5314be701bbab7cfeec602f)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/4c181a30de2931d54cccafb1edd93b401d9ee898)
 
 ---
 
