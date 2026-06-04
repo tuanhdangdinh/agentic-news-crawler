@@ -6,6 +6,9 @@
 - Initial draft: extractor module, prompt templates, extract tool in agent, CLI wiring, Pydantic migration
 - Rev 2 (2026-06-03): five bugs found and fixed during smoke test — markdown code fence stripping, schema inferred once, nullable properties, auto-extraction fallback, article body truncation
 - Rev 3 (2026-06-04): `PageResult` moved from `src/crawler.py` to `src/models/page.py` — all modules import via `from src.models import PageResult`
+- Rev 4 (2026-06-04): logging migrated from stdlib to structlog with JSON output; `src/logging_config.py` added
+
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/26e7bbf2c8a2c333e5314be701bbab7cfeec602f)
 
 ---
 

@@ -10,6 +10,8 @@
 - Rev 5: two bugs found and fixed during re-run — (1) premature `finish` when reachable URLs remained in frontier; (2) stale articles collected because Claude lacked today's date
 - Rev 6: `CrawlState` gained `stop_reason`, `article_pages`, `frontier_at_finish` fields to support finish guard and output metadata; `_parse_min_articles` and `_is_article_page` private helpers added
 
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/c799704f43547ac6ef6f1d935958fdb4eaab5942)
+
 ---
 
 ## Overview
