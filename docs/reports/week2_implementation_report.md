@@ -7,7 +7,7 @@
 - Rev 2: `PageResult` migrated from `@dataclass` to Pydantic `BaseModel`; `src/output.py` uses `model_dump()` instead of `dataclasses.asdict`
 - Rev 3: `PageResult` moved from `src/crawler.py` to `src/models/page.py`; `fetch_time` and `headers` fields added in Week 5
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/db1bc663ee6c3f40cbe81a7f3c6416f72aaabf45)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/7d7ce87e8e07d210c76036934caad90c22a99116)
 
 ---
 
