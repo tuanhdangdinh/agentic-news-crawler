@@ -7,6 +7,7 @@ import pytest
 from src.agent import (
     AgentConfig,
     _allowed,
+    _article_candidate_links,
     _canonical,
     _is_article_page,
     _parse_min_articles,
@@ -63,9 +64,28 @@ def test_is_article_page_detects_article_metadata():
     assert _is_article_page(_article_page("https://example.com/news/gold"))
 
 
+def test_is_article_page_detects_generic_article_url():
+    page = _page("https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html")
+    assert _is_article_page(page)
+
+
 def test_is_article_page_rejects_homepage_and_category():
     assert not _is_article_page(_page("https://cafef.vn"))
     assert not _is_article_page(_page("https://cafef.vn/tai-chinh-ngan-hang.chn"))
+    assert not _is_article_page(_page("https://vietnamnews.vn/economy"))
+
+
+def test_article_candidate_links_returns_known_article_pattern_matches():
+    links = [
+        "https://vneconomy.vn/tai-chinh.htm",
+        "https://vneconomy.vn/ngan-hang-nha-nuoc-hut-rong-gan-32000-ty-dong.htm",
+        "https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html",
+        "https://example.com/article.html",
+    ]
+    assert _article_candidate_links(links) == [
+        "https://vneconomy.vn/ngan-hang-nha-nuoc-hut-rong-gan-32000-ty-dong.htm",
+        "https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html",
+    ]
 
 
 def test_canonical_strips_fragment():

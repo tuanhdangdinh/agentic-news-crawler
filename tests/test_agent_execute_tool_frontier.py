@@ -5,6 +5,22 @@ from __future__ import annotations
 import pytest
 
 from src.agent import AgentConfig, CrawlState, _execute_tool
+from src.models import PageResult
+
+
+def _page() -> PageResult:
+    return PageResult(
+        url="https://vneconomy.vn",
+        final_url="https://vneconomy.vn",
+        status_code=200,
+        title="VnEconomy",
+        markdown="Homepage",
+        links_internal=[
+            "https://vneconomy.vn/article-one.htm",
+            "https://vneconomy.vn/article-two.htm#comments",
+        ],
+        success=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -110,3 +126,51 @@ async def test_add_to_frontier_rejects_duplicate_frontier_url():
     )
     assert result == "skipped (already in frontier)"
     assert state.frontier == [("https://cafef.vn/article.chn", 1)]
+
+
+@pytest.mark.asyncio
+async def test_add_to_frontier_accepts_exact_current_page_link():
+    state = CrawlState()
+    result = await _execute_tool(
+        "add_to_frontier",
+        {"url": "https://vneconomy.vn/article-one.htm"},
+        state,
+        AgentConfig(max_depth=2),
+        "https://vneconomy.vn",
+        0,
+        _page(),
+    )
+    assert result == "added at depth 1"
+    assert state.frontier == [("https://vneconomy.vn/article-one.htm", 1)]
+
+
+@pytest.mark.asyncio
+async def test_add_to_frontier_rejects_url_not_found_in_current_page_links():
+    state = CrawlState()
+    result = await _execute_tool(
+        "add_to_frontier",
+        {"url": "https://vneconomy.vn/article-one-188260605.html"},
+        state,
+        AgentConfig(max_depth=2),
+        "https://vneconomy.vn",
+        0,
+        _page(),
+    )
+    assert result == "skipped (not found in current page links)"
+    assert state.frontier == []
+
+
+@pytest.mark.asyncio
+async def test_add_to_frontier_matches_current_page_links_after_stripping_fragment():
+    state = CrawlState()
+    result = await _execute_tool(
+        "add_to_frontier",
+        {"url": "https://vneconomy.vn/article-two.htm#top"},
+        state,
+        AgentConfig(max_depth=2),
+        "https://vneconomy.vn",
+        0,
+        _page(),
+    )
+    assert result == "added at depth 1"
+    assert state.frontier == [("https://vneconomy.vn/article-two.htm", 1)]

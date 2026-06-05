@@ -9,6 +9,7 @@
 - Rev 4: `AgentConfig` and `CrawlState` migrated from `@dataclass` to Pydantic `BaseModel`; `tokens_used` changed to `@computed_field`
 - Rev 5: two bugs found and fixed during re-run — (1) premature `finish` when reachable URLs remained in frontier; (2) stale articles collected because Claude lacked today's date
 - Rev 6: `CrawlState` gained `stop_reason`, `article_pages`, `frontier_at_finish` fields to support finish guard and output metadata; `_parse_min_articles` and `_is_article_page` private helpers added
+- Rev 7 (2026-06-05): article candidate links and exact current-page URL guard added to prevent fabricated article URLs
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/c799704f43547ac6ef6f1d935958fdb4eaab5942)
 
@@ -126,6 +127,8 @@ Injected variables (rendered into the system prompt):
 - **Rendered once per page** — live crawl state injected so Claude always sees current progress
 - **Markdown capped at 6,000 chars** — balances context quality against token cost; long articles are readable at this limit
 - **Links capped at 40** — enough for Claude to decide on a typical news page; avoids bloating the prompt on heavily-linked index pages
+- **Article candidate links shown separately** — internal links matching article URL patterns are surfaced even when the full link list is long; this fixed cases where the relevant `.htm` article was outside the first visible links
+- **Exact-link requirement** — the prompt tells Claude to copy URLs exactly from Internal Links or Article Candidate Links; code now rejects `add_to_frontier` URLs not extracted from the current page, preventing fabricated slugs
 - **Live crawl state counters at the bottom** — Claude can see when the budget is near and call `finish` earlier
 - **`frontier_reachable` shown separately from `frontier_count`** — Claude needs to know how many URLs it can still reach at the current depth ceiling, not just how many are queued total
 
@@ -141,6 +144,7 @@ Injected variables (rendered into each per-page user turn):
 | `max_depth` | `AgentConfig.max_depth` | Ceiling for context |
 | `markdown` | `page.markdown` | Page content — truncated to 6,000 chars |
 | `links_internal` | `page.links_internal` | Internal links — first 40 shown |
+| `article_candidate_links` | `_article_candidate_links(page.links_internal)` | Internal article-looking links — first 60 shown |
 | `pages_count` | `len(state.pages)` | Pages collected so far |
 | `frontier_count` | `len(state.frontier)` | Total URLs waiting to be fetched |
 | `frontier_reachable` | frontier URLs with depth ≤ max_depth | URLs still reachable in current crawl |

@@ -13,6 +13,7 @@ Your response must be a valid JSON object matching this schema:
 Focus only on the **main article body** — the primary headline, author, date, and article text.
 Ignore navigation menus, sidebars, related-article teasers, social share buttons, comment sections, and footer content.
 If a field cannot be found in the main article, set it to null.
+For author/byline fields, use only an explicit article byline or a person named in author metadata. Do not infer the author from people mentioned in the story, interview subjects, or phrases such as "spoke with", "talked with", "told", "shared with", or "reported that". If the text names an interviewer but does not present them as the article byline, set the author field to null.
 {{ markdown | truncate(12000, end="… [truncated]") }}
 
 Use the exact property names from the JSON Schema — do not rename or reformat keys.

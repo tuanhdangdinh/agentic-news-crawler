@@ -22,6 +22,13 @@ def _page(markdown: str = "Article about GDP growth in Vietnam") -> PageResult:
     )
 
 
+def _page_with_byline(markdown: str = "Article about GDP growth in Vietnam") -> PageResult:
+    page = _page(markdown)
+    page.metadata["byline_author"] = "Ngan Ha"
+    page.metadata["og:site_name"] = "Vietnam Investment Review - VIR"
+    return page
+
+
 def _mock_response(text: str) -> MagicMock:
     msg = MagicMock()
     msg.content = [MagicMock(text=text)]
@@ -55,6 +62,41 @@ async def test_extract_passes_schema_validation():
         mock_client.messages.create = AsyncMock(return_value=_mock_response(json.dumps(payload)))
         result = await extract(_page(), "extract title", schema=schema)
     assert "error" not in result
+
+
+@pytest.mark.asyncio
+async def test_extract_prompt_disambiguates_interviewer_from_author():
+    schema = {"type": "object", "properties": {"author": {"type": "string"}}}
+    payload = {"author": None}
+    with patch("src.extractor.anthropic.AsyncAnthropic") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(json.dumps(payload)))
+        await extract(
+            _page("The CEO spoke with VIR's My Kieu about Qualcomm's strategy."),
+            "extract author",
+            schema=schema,
+        )
+
+    sent = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "Do not infer the author" in sent
+    assert "spoke with" in sent
+    assert "interviewer" in sent
+
+
+@pytest.mark.asyncio
+async def test_extract_includes_byline_author_metadata_in_prompt_context():
+    schema = {"type": "object", "properties": {"author": {"type": "string"}}}
+    payload = {"author": "Ngan Ha"}
+    with patch("src.extractor.anthropic.AsyncAnthropic") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(json.dumps(payload)))
+        await extract(_page_with_byline(), "extract author", schema=schema)
+
+    sent = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "Author: Ngan Ha" in sent
+    assert "Source: Vietnam Investment Review - VIR" in sent
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,12 @@ async def extract(
     pub_date = detect_page_date(page)
     if pub_date:
         header.append(f"Published: {pub_date.isoformat()}")
+    byline_author = page.metadata.get("byline_author")
+    if byline_author:
+        header.append(f"Author: {byline_author}")
+    source = page.metadata.get("og:site_name") or page.metadata.get("source")
+    if source:
+        header.append(f"Source: {source}")
     content = ("\n".join(header) + "\n\n" + page.markdown) if header else page.markdown
 
     user_content = render(

@@ -8,6 +8,7 @@
 - Rev 3 (2026-06-04): `PageResult` moved from `src/crawler.py` to `src/models/page.py` — all modules import via `from src.models import PageResult`
 - Rev 4 (2026-06-04): logging migrated from stdlib to structlog with JSON output; `src/logging_config.py` added
 - Rev 5 (2026-06-04): extraction hardened — snake_case schema keys, recursive nullable, title/date header injection, and article-body scoping that strips sidebar noise without truncation
+- Rev 6 (2026-06-05): author extraction and article-body scoping hardened across Vietnamese publishers; near-empty scoped markdown now falls back to full-page fetch
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/4c181a30de2931d54cccafb1edd93b401d9ee898)
 
@@ -79,6 +80,7 @@ flowchart TD
 - **Schema inference as fallback** — when `schema=None`, `infer_schema()` is called automatically; user does not need to supply a schema to get structured output
 - **Validation with `jsonschema`** — Claude output is parsed as JSON then validated against the schema; both parse errors and schema violations are caught and surfaced as error dicts
 - **Extraction stored in `page.metadata`** — result attached to `page.metadata["extracted"]` or `page.metadata["extraction_error"]`; no new fields added to `PageResult`
+- **Explicit byline context injected** — `extract()` prepends `Author: ...` from `page.metadata["byline_author"]` when available, plus source metadata, so article-body scoping can omit visual headers without losing author/source fields
 
 ### Public Interface
 
@@ -103,6 +105,7 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 - Returns `{"error": "page has no markdown content", "raw": ""}` immediately if `page.markdown` is empty
 - Calls `infer_schema(prompt)` when `schema` is `None`
 - Prepends a title + publish-date header to the markdown before extraction (Rev 5) — `# {page.title}` plus `Published: {detect_page_date(page)}`; on the CafeF/TuoiTre scoped article bodies the H1 and date can sit outside the selected body element, so without this injection Claude returns `null` for title and date on those article-body fetches
+- Prepends author and source when available (Rev 6) — `Author: {page.metadata["byline_author"]}` and `Source: {page.metadata["og:site_name"]}`; this fixed VIR and other pages where the visible author is in full HTML but not in the scoped markdown body
 - Uses `detect_page_date` (from `src/date_filter.py`) as the single source of truth for the date — metadata, then header, then URL pattern — so the date is correct even when the page exposes no date meta tag
 - Renders `prompts/extract.j2` with `markdown`, `prompt`, and `schema_json`
 - Parses Claude's response as JSON; returns error dict on `JSONDecodeError`
@@ -232,6 +235,38 @@ All three data models migrated from `@dataclass` to Pydantic `BaseModel`:
 
 ---
 
+## Module: `src/crawler.py` updates (Rev 6)
+
+### Design Decisions
+
+- **Use `target_elements`, not `css_selector`, for article-body scoping** — markdown is limited to article regions while full-page metadata and links remain available to the agent
+- **Prefer domain-specific targets over generic targets** — known CMS templates such as Baodautu and VietnamPlus need narrower selectors than the generic fallback can safely provide
+- **Treat near-empty scoped markdown as failure** — selectors can match but produce only whitespace; retrying full-page prevents false-success article pages with no body
+- **Extract byline from full HTML** — scoped markdown may omit visual headers, so full HTML is parsed for explicit author selectors before output/extraction
+
+### Public Interface
+
+```python
+async def fetch_page(
+    url: str,
+    css_selector: str | None = None,
+    *,
+    article_body: bool = True,
+) -> PageResult
+```
+
+- `article_body=True` uses known, domain-specific, or generic article targets for article-looking URLs
+- Known selectors remain clean for CafeF, TuoiTre, and VnEconomy
+- Domain-specific targets added:
+  - `baodautu.vn` → `.col630.ml-auto.mb40`
+  - `vietnamplus.vn` → `.article__title`, `.article__sapo`, `.article__meta`, `.article__body.zce-content-body.cms-body`
+- Generic targets remain as fallback for unknown article pages and include common title, date, byline, summary, and body selectors
+- `metadata["byline_author"]` is populated from explicit byline selectors such as `.author-detail`, `.byline`, `.article-author`, `.cms-author`, and `.author`
+- Byline cleanup removes prefixes such as `By` and strips email/date suffixes such as `Mai Phương - email` or `Hà Nguyễn - 05/06/2026 08:03`
+- Scoped fetches retry full-page when markdown is empty, whitespace-only, or shorter than the minimum usable threshold
+
+---
+
 ## Module: `main.py`
 
 ### Design Decisions
@@ -297,6 +332,16 @@ uv run python main.py https://cafef.vn \
 | Publish date populated | `publish_date` resolved from the page's own signals | ✓ — `2026-06-04` from the URL date pattern (CafeF/TuoiTre) and the `article:published_time` meta tag (VnEconomy) |
 | Full-page links preserved | Article fetch keeps nav links for the frontier | ✓ — 56/179/116 internal links via `target_elements` scoping |
 
+**Rev 6 re-verification (2026-06-05):** author and article-body checks across live Vietnamese economy/news sites.
+
+| Check | Expected | Actual |
+|---|---|---|
+| VIR byline recovered outside scoped markdown | `author == "Ngan Ha"` | ✓ — full HTML byline stored as `metadata.byline_author` and injected into extraction |
+| Baodautu near-empty scoped markdown fixed | Article markdown is not `"\n"` and author is present | ✓ — `8,929` chars and `author == "Hà Nguyễn"` |
+| VietnamPlus noisy full-page markdown reduced | Article body excludes large footer/list noise | ✓ — article markdown reduced to `7,243` chars with `author == "Khánh Ly"` |
+| Generic no-byline article does not guess author | `author == null` when only agency credit exists | ✓ — Vietnam News returned `null` for person author and kept source `vietnamnews.vn` |
+| Token budget remains sufficient for two-page smoke runs | Run stays far below `500,000` default token budget | ✓ — observed runs used roughly `12,587` to `31,054` tokens |
+
 ---
 
 ## Known Limitations
@@ -305,7 +350,8 @@ uv run python main.py https://cafef.vn \
 - **~~Schema inference quality~~** — RESOLVED (Rev 5): snake_case enforcement in `infer_schema.j2` plus an exact-key instruction in `extract.j2` keep field naming consistent across pages; recursive `_make_nullable` removes the nested-null validation failures; user-supplied schemas via `--extract-schema` remain the most reliable for a fixed contract
 - **No retry on extraction failure** — if Claude returns malformed JSON, the error is recorded and the page moves on; no retry attempt; acceptable at MVP scope
 - **~~Extraction not date-filtered~~** — RESOLVED (Week 5): the agent loop drops article pages outside the date range before extraction; see the Week 5 report
-- **~~Sidebar dominates early markdown~~** — RESOLVED (Rev 5): article-body scoping via Crawl4AI `target_elements` (per-domain selector map in `src/crawler.py`) returns ~2,500–4,500 chars of clean article body, cutting 60–82% of tokens, while keeping head metadata (title, date) and full-page links intact; the 12,000-char truncation now rarely triggers
+- **~~Sidebar dominates early markdown~~** — RESOLVED (Rev 5/6): article-body scoping via Crawl4AI `target_elements` uses known, domain-specific, and generic selector maps in `src/crawler.py`, keeping head metadata and full-page links intact; Baodautu now returns `8,929` article chars instead of a one-character false success, and VietnamPlus drops from noisy `17k–23k` markdown to `7,243` chars
+- **Residual related-item tails** — some publishers include one related story inside the article body container, especially VietnamPlus; extraction prompt ignores related teasers, but a future post-processing pass could remove repeated headings after the main article source marker
 - **Publish date precision** — `detect_page_date` resolves date only (no time); adequate for a publish-date field but not for intraday ordering; not yet scheduled
 
 ---

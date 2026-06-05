@@ -8,6 +8,7 @@ import time
 from urllib.parse import urlparse
 
 import structlog
+from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
@@ -21,8 +22,12 @@ _BROWSER_CFG = BrowserConfig(browser_type="chromium", headless=True)
 _RUN_CFG = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,
     check_robots_txt=True,
+    excluded_tags=["script", "style", "noscript", "form"],
+    remove_forms=True,
+    remove_overlay_elements=True,
     markdown_generator=DefaultMarkdownGenerator(
-        content_filter=PruningContentFilter(threshold=0.6)
+        content_filter=PruningContentFilter(threshold=0.6),
+        options={"ignore_links": True},
     ),
 )
 
@@ -35,12 +40,96 @@ _ARTICLE_SELECTORS: dict[str, tuple[str, str]] = {
     "vneconomy.vn": (r"/[^/]{30,}\.htm$",      ".block-detail-page"),
 }
 
+_ARTICLE_TARGETS: dict[str, tuple[str, list[str]]] = {
+    "nhandan.vn": (
+        r"/[^/]+-post\d+\.html$",
+        [".main-col.content-col"],
+    ),
+    "baodautu.vn": (
+        r"/[^/]+-d\d+\.html$",
+        [".col630.ml-auto.mb40"],
+    ),
+    "vietnamplus.vn": (
+        r"/[^/]+-post\d+\.vnp$",
+        [
+            ".article__title",
+            ".article__sapo",
+            ".article__meta",
+            ".article__body.zce-content-body.cms-body",
+        ],
+    ),
+}
+
+_GENERIC_ARTICLE_TARGETS = [
+    ".detail .headline",
+    ".detail__meta",
+    ".datetime",
+    ".title-detail",
+    ".author-share-top",
+    ".author-detail",
+    ".byline",
+    ".article-author",
+    ".author-name",
+    ".cms-author",
+    ".author",
+    "[itemprop='author']",
+    ".sapo_detail",
+    ".sapo",
+    ".article__title",
+    ".article__sapo",
+    ".article__meta",
+    "[itemprop='headline']",
+    "[itemprop='datePublished']",
+    "[itemprop='description']",
+    "[itemprop='articleBody']",
+    "#abody",
+    ".article__content",
+    ".article-content",
+    ".article-body",
+    ".articleBody",
+    ".article-text",
+    ".article-body-content",
+    ".story-content",
+    ".story-body",
+    ".post-content",
+    ".entry-content",
+    ".detail-content",
+    ".content-detail",
+    ".news-detail",
+    ".article-detail",
+    ".body-content",
+]
+
+_GENERIC_ARTICLE_PATTERNS = [
+    re.compile(r"/\d{5,}/[^/]+(?:-[^/]+){2,}\.(?:html?|shtml)$"),
+    re.compile(r"/[^/]+-\d{8,}\.(?:html?|shtml)$"),
+    re.compile(r"/[^/]+-post\d+\.html$"),
+    re.compile(r"/[^/]+-post\d+\.vnp$"),
+    re.compile(r"/[^/]+(?:-[^/]+){5,}\.(?:html?|shtml)$"),
+]
+
+_BYLINE_SELECTORS = [
+    ".author-detail",
+    ".__MB_AUTHOR",
+    ".byline",
+    ".article-author",
+    ".news-author",
+    ".detail-author",
+    ".author-name",
+    ".cms-author",
+    ".author",
+    "[itemprop='author']",
+    "[rel='author']",
+]
+
+_MIN_SCOPED_MARKDOWN_CHARS = 200
+
 
 def article_selector_for_url(url: str) -> str | None:
     """Return the article-body CSS selector for a known site URL, or None.
 
-    This is the single source of truth for URL-based article classification
-    used by both the crawler (scoped fetch) and the agent loop (article tagging).
+    Known selectors are preferred over generic detection because they are cleaner
+    and less likely to include sidebars or related links.
     """
     parsed = urlparse(url)
     domain = parsed.netloc.removeprefix("www.")
@@ -49,6 +138,40 @@ def article_selector_for_url(url: str) -> str | None:
         return None
     pattern, selector = entry
     return selector if re.search(pattern, parsed.path) else None
+
+
+def looks_like_article_url(url: str) -> bool:
+    """Return True when a URL matches known or generic article patterns."""
+    if article_selector_for_url(url) is not None:
+        return True
+
+    parsed = urlparse(url)
+    domain = parsed.netloc.removeprefix("www.")
+    entry = _ARTICLE_TARGETS.get(domain)
+    if entry is not None:
+        pattern, _targets = entry
+        if re.search(pattern, parsed.path):
+            return True
+
+    path = parsed.path.rstrip("/")
+    return any(pattern.search(path) for pattern in _GENERIC_ARTICLE_PATTERNS)
+
+
+def article_target_elements_for_url(url: str) -> list[str]:
+    """Return target_elements for an article URL, preferring known selectors."""
+    selector = article_selector_for_url(url)
+    if selector is not None:
+        return [selector]
+
+    parsed = urlparse(url)
+    domain = parsed.netloc.removeprefix("www.")
+    entry = _ARTICLE_TARGETS.get(domain)
+    if entry is not None:
+        pattern, targets = entry
+        if re.search(pattern, parsed.path):
+            return list(targets)
+
+    return list(_GENERIC_ARTICLE_TARGETS) if looks_like_article_url(url) else []
 
 
 def _make_cfg(
@@ -67,10 +190,14 @@ def _make_cfg(
     return CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         check_robots_txt=True,
+        excluded_tags=["script", "style", "noscript", "form"],
+        remove_forms=True,
+        remove_overlay_elements=True,
         css_selector=css_selector,
         target_elements=target_elements,
         markdown_generator=DefaultMarkdownGenerator(
-            content_filter=PruningContentFilter(threshold=0.6)
+            content_filter=PruningContentFilter(threshold=0.6),
+            options={"ignore_links": True},
         ),
     )
 
@@ -80,6 +207,40 @@ def _extract_links(links_dict: dict) -> tuple[list[str], list[str]]:
     internal = [lnk.get("href", "") for lnk in links_dict.get("internal", []) if lnk.get("href")]
     external = [lnk.get("href", "") for lnk in links_dict.get("external", []) if lnk.get("href")]
     return internal, external
+
+
+def _clean_byline(text: str) -> str | None:
+    """Normalize an explicit byline string."""
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(by|author)\s*[:\-]?\s+", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s*[-–|]\s*[\w.+-]+@[\w.-]+\.\w+\s*$", "", text).strip()
+    text = re.sub(r"\s*[-–|]\s*\d{1,2}[/:]\d{1,2}.*$", "", text).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(token in lowered for token in ["advertisement", "subscribe", "comment"]):
+        return None
+    if len(text.split()) > 6:
+        return None
+    return text
+
+
+def _has_usable_scoped_markdown(markdown: str) -> bool:
+    """Return True when scoped article markdown is long enough to trust."""
+    return len(markdown.strip()) >= _MIN_SCOPED_MARKDOWN_CHARS
+
+
+def _extract_byline_author(html: str | None) -> str | None:
+    """Extract an explicit article byline from full page HTML when present."""
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "lxml")
+    for selector in _BYLINE_SELECTORS:
+        for element in soup.select(selector):
+            candidate = _clean_byline(element.get("content") or element.get_text(" ", strip=True))
+            if candidate:
+                return candidate
+    return None
 
 
 async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
@@ -92,12 +253,18 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
                 result = await crawler.arun(url=url, config=cfg)
             fetch_time = round(time.monotonic() - t0, 2)
 
-            if not result.success:
-                status = result.status_code or 0
+            status = result.status_code or 0
+            if not result.success or status >= 400:
+                error = result.error_message or f"HTTP {status}"
 
                 if status == 429:
                     resp_hdrs = getattr(result, "response_headers", {}) or {}
-                    retry_after = int(resp_hdrs.get("retry-after", resp_hdrs.get("Retry-After", 60)))
+                    raw_retry_after = resp_hdrs.get("retry-after") or resp_hdrs.get("Retry-After") or "60"
+                    try:
+                        # Retry-After is seconds or an HTTP-date; only seconds are honoured, capped at 120s.
+                        retry_after = min(int(raw_retry_after), 120)
+                    except ValueError:
+                        retry_after = 60
                     logger.warning("fetch 429", url=url, retry_after=retry_after, attempt=attempt + 1)
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_after)
@@ -109,7 +276,7 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
                     await asyncio.sleep(backoff)
                     continue
 
-                logger.warning("fetch failed", url=url, status=result.status_code, error=result.error_message)
+                logger.warning("fetch failed", url=url, status=result.status_code, error=error)
                 return PageResult(
                     url=url,
                     final_url=url,
@@ -118,7 +285,7 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
                     markdown="",
                     fetch_time=fetch_time,
                     success=False,
-                    error=result.error_message or "crawl failed",
+                    error=error,
                 )
 
             md = result.markdown
@@ -126,6 +293,11 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
             raw_markdown = md.raw_markdown if md else None
             internal, external = _extract_links(result.links or {})
             metadata = result.metadata or {}
+            byline_author = None
+            if looks_like_article_url(result.url or url):
+                byline_author = _extract_byline_author(result.html)
+            if byline_author:
+                metadata["byline_author"] = byline_author
             title = metadata.get("title") or metadata.get("og:title")
             resp_hdrs = getattr(result, "response_headers", {}) or {}
 
@@ -198,20 +370,22 @@ async def fetch_page(
         are returned as PageResult(success=False, error=...).
 
     Fallback:
-        If a scoped fetch succeeds but returns empty markdown (e.g. stale
+        If a scoped fetch succeeds but returns unusable markdown (e.g. stale
         selector), one full-page fetch is attempted automatically.
     """
     target_elements: list[str] | None = None
     if css_selector is None and article_body:
-        selector = article_selector_for_url(url)
-        if selector:
-            target_elements = [selector]
+        target_elements = article_target_elements_for_url(url) or None
 
     logger.debug("fetch start", url=url, css_selector=css_selector, target_elements=target_elements)
     page = await _fetch_with_retries(url, _make_cfg(css_selector, target_elements))
 
-    if (css_selector or target_elements) and page.success and not page.markdown:
-        logger.warning("scoped fetch returned empty markdown, retrying full page", url=url)
+    if (
+        (css_selector or target_elements)
+        and page.success
+        and not _has_usable_scoped_markdown(page.markdown)
+    ):
+        logger.warning("scoped fetch returned unusable markdown, retrying full page", url=url)
         page = await _fetch_with_retries(url, _RUN_CFG)
 
     return page

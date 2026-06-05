@@ -57,7 +57,12 @@ No functions implemented. Week 1 deliverables are configuration files only.
 #### `fetch_page`
 
 ```python
-async def fetch_page(url: str, css_selector: str | None = None) -> PageResult
+async def fetch_page(
+    url: str,
+    css_selector: str | None = None,
+    *,
+    article_body: bool = True,
+) -> PageResult
 ```
 
 **Arguments:**
@@ -66,21 +71,38 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult
 |---|---|---|
 | `url` | `str` | Absolute URL to fetch. This is stored as `PageResult.url` even if redirects occur. |
 | `css_selector` | `str \| None` | Optional CSS selector used to limit extraction to part of the page. When `None`, Crawl4AI extracts from the full page. |
+| `article_body` | `bool` | When `True`, article-looking URLs use known or generic article-body targets. When `False`, fetches the full page. |
 
 - Fetches one web page through Crawl4AI using headless Chromium
 - Returns a normalized `PageResult` containing markdown, metadata, links, and fetch status
 - Uses boilerplate-pruned markdown when Crawl4AI provides it; otherwise uses raw markdown
-- When `css_selector` is provided, limits content extraction to matching elements
+- When `css_selector` is provided, hard-scopes content extraction to matching elements
+- When `article_body=True` and `css_selector=None`, detects article-looking URLs and passes Crawl4AI `target_elements` so markdown focuses on title, date, author, summary, and article body while metadata and links remain available
+- Uses known site targets before generic targets, including CafeF/TuoiTre/VnEconomy article selectors and domain-specific targets for Baodautu and VietnamPlus
+- Retries a scoped article fetch as a full-page fetch when scoped markdown is unusable, including whitespace-only or very short markdown
+- Parses explicit bylines from full HTML into `PageResult.metadata["byline_author"]` when an article page exposes an author outside the scoped markdown
 - Converts crawl errors and unexpected exceptions into `PageResult(success=False, error=...)`
-- Crawl4AI config: `cache_mode=BYPASS`, `check_robots_txt=True`, `PruningContentFilter(threshold=0.6)`
+- Treats HTTP status codes `>= 400` as failures even if Crawl4AI reports `success=True`
+- Crawl4AI config: `cache_mode=BYPASS`, `check_robots_txt=True`, `remove_forms=True`, `remove_overlay_elements=True`, `PruningContentFilter(threshold=0.6)`, markdown links ignored
 
 **Test cases:**
 - `fetch_page("https://cafef.vn")` → `success=True`, `status_code=200`, `markdown` non-empty, `links_internal` non-empty
 - `fetch_page("https://cafef.vn")` → `title` is not None
 - `fetch_page("https://invalid-url-that-does-not-exist.xyz")` → `success=False`, `error` is not None, does not raise
 - `fetch_page("https://cafef.vn", css_selector=".main-content")` → returns `PageResult` without raising
+- `fetch_page("https://cafef.vn/bai-viet-123456789.chn")` → uses `target_elements=[".detail-content"]`, not `css_selector`
+- `fetch_page("https://baodautu.vn/...-d611681.html")` → uses domain-specific target `.col630.ml-auto.mb40`
+- `fetch_page("https://www.vietnamplus.vn/...-post1114632.vnp")` → uses title/sapo/meta/body targets and preserves byline author
+- Scoped fetch returning `"\n"` or empty markdown → retries full-page fetch
+- Article HTML with `<p class="author-detail">By Ngan Ha</p>` → `metadata.byline_author == "Ngan Ha"`
 
-**Private helpers:** `_extract_links` — flattens Crawl4AI link dict to plain URL lists
+**Private helpers:**
+- `_extract_links` — flattens Crawl4AI link dict to plain URL lists
+- `article_selector_for_url` — returns known site article-body selector for matching URLs
+- `looks_like_article_url` — classifies known, domain-specific, and generic article URL patterns
+- `article_target_elements_for_url` — returns known, domain-specific, or generic article target selectors
+- `_extract_byline_author` — extracts explicit author bylines from full page HTML
+- `_clean_byline` — normalizes byline text and removes email/date suffixes
 
 ---
 
@@ -280,7 +302,9 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState
 - `_canonical` — removes URL fragments before deduplication
 - `_same_domain` — checks whether two URLs have the same network location
 - `_parse_min_articles` — extracts numeric minimum article count from the goal string (e.g. `"at least 3 articles"` → `3`)
-- `_is_article_page` — returns True when page metadata (`article:published_time`) or URL pattern (`/slug-NNNNNNNNN.chn`) indicates an article
+- `_is_article_page` — returns True when page metadata (`article:published_time`) or known/generic article URL patterns indicate an article
+- `_is_current_page_link` — rejects agent-added URLs that were not extracted from the current page
+- `_article_candidate_links` — surfaces internal links that match article URL patterns even when the full internal-link list is long
 
 ---
 
@@ -307,7 +331,9 @@ async def extract(
 | `schema` | `dict \| None` | JSON Schema used to validate Claude's output. When `None`, `infer_schema(prompt)` is called first. |
 
 - Extracts structured data from one fetched page
-- Sends the page markdown, user extraction prompt, and JSON Schema to Claude using `prompts/extract.j2`
+- Sends page content, user extraction prompt, and JSON Schema to Claude using `prompts/extract.j2`
+- Prepends title, detected publish date, explicit byline author, and source when available so scoped article-body markdown can still produce complete structured fields
+- Uses `detect_page_date(page)` as the date source before rendering extraction context
 - If no schema is supplied, first derives one from the prompt with `infer_schema`
 - Parses Claude's response as JSON and validates it with `jsonschema`
 - Returns the validated extraction result on success
@@ -315,6 +341,8 @@ async def extract(
 
 **Test cases:**
 - `extract(page, "extract title and date")` → returns dict with non-empty keys
+- `extract(page_with_metadata_byline, "extract author")` → rendered prompt includes `Author: ...`
+- `extract(page_with_site_name, "extract source")` → rendered prompt includes `Source: ...`
 - `extract(page, "extract title", schema={"type": "object", "properties": {"title": {"type": "string"}}})` → output passes schema validation
 - `extract(page, "extract title", schema={"type": "object", "required": ["missing_field"]})` → returns dict with `"error"` key, does not raise
 - `extract(page_with_empty_markdown, "extract title")` → returns dict with `"error"` key, does not raise

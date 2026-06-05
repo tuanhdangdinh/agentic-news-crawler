@@ -25,6 +25,7 @@ _USER_CTX = {
     "max_depth": 1,
     "markdown": "Sample content",
     "links_internal": ["https://cafef.vn/article.chn"],
+    "article_candidate_links": ["https://cafef.vn/article.chn"],
     "pages_count": 0,
     "article_pages_count": 0,
     "min_articles": 0,

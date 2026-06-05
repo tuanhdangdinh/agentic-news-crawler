@@ -11,6 +11,13 @@
 - {{ link }}
 {% endfor %}
 
+## Article Candidate Links ({{ article_candidate_links | length }} total, showing first 60)
+{% for link in article_candidate_links[:60] %}
+- {{ link }}
+{% endfor %}
+
+Only pass exact URLs from the Internal Links or Article Candidate Links lists to `add_to_frontier`.
+
 ## Crawl State
 - Pages collected: {{ pages_count }}
 - Article pages collected: {{ article_pages_count }}{% if min_articles %} / {{ min_articles }}{% endif %}

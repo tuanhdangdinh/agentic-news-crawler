@@ -11,7 +11,7 @@ import anthropic
 import structlog
 from pydantic import BaseModel, Field, computed_field
 
-from src.crawler import article_selector_for_url, fetch_page
+from src.crawler import fetch_page, looks_like_article_url
 from src.date_filter import detect_page_date, is_in_range, parse_date_filter
 from src.extractor import extract as extractor_extract
 from src.extractor import infer_schema
@@ -168,9 +168,9 @@ def _is_article_page(page: PageResult) -> bool:
     metadata = page.metadata or {}
     if metadata.get("article:published_time"):
         return True
-    # article_selector_for_url is the single source of truth for URL-based
-    # article classification; covers CafeF, TuoiTre, VnEconomy patterns.
-    if article_selector_for_url(page.final_url) is not None:
+    # URL-based article classification covers known site selectors plus generic
+    # article/detail URL patterns for unsupported sites.
+    if looks_like_article_url(page.final_url):
         return True
     # Fallback for sites not yet in the selector map.
     path = urlparse(page.final_url).path
@@ -191,6 +191,23 @@ def _allowed(url: str, seed: str, config: AgentConfig) -> bool:
         config.include_patterns
         and not any(fnmatch.fnmatch(url, p) for p in config.include_patterns)
     )
+
+
+def _is_current_page_link(url: str, page: PageResult | None) -> bool:
+    """Return True when the URL was extracted from the current page.
+
+    The model sees links as text and can accidentally rewrite them. When a
+    current page is available, only allow exact extracted links, after the same
+    fragment-stripping canonicalization used for de-duplication.
+    """
+    if page is None:
+        return True
+    return url in {_canonical(link) for link in page.links_internal}
+
+
+def _article_candidate_links(links: list[str]) -> list[str]:
+    """Return links matching known article URL patterns."""
+    return [link for link in links if looks_like_article_url(link)]
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +242,9 @@ async def _execute_tool(
         if not _allowed(url, seed_url, config):
             logger.debug("guardrail: blocked by filter", url=url)
             return "skipped (blocked by guardrail)"
+        if not _is_current_page_link(url, current_page):
+            logger.debug("guardrail: not in current page links", url=url)
+            return "skipped (not found in current page links)"
         if any(u == url for u, _ in state.frontier):
             logger.debug("guardrail: already in frontier", url=url)
             return "skipped (already in frontier)"
@@ -309,6 +329,7 @@ async def _agent_turn(
         max_depth=config.max_depth,
         markdown=page.markdown,
         links_internal=page.links_internal,
+        article_candidate_links=_article_candidate_links(page.links_internal),
         pages_count=len(state.pages),
         frontier_count=len(state.frontier),
         frontier_reachable=len([u for u, d in state.frontier if d <= config.max_depth]),

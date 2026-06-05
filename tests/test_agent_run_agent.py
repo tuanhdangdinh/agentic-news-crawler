@@ -219,7 +219,7 @@ async def test_run_agent_exits_when_token_budget_exceeded():
         mock_client = AsyncMock()
         mock_cls.return_value = mock_client
         mock_client.messages.create = AsyncMock(
-            return_value=_add_url_response("https://cafef.vn/article-extra.chn")
+            return_value=_add_url_response("https://cafef.vn/article-1.chn")
         )
         state = await run_agent("https://cafef.vn", config)
     assert state.stop_reason == "token_budget"
