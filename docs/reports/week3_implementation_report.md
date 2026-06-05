@@ -24,13 +24,6 @@
 - Four modules implemented or updated: `src/prompts.py`, `src/agent.py`, `prompts/system.j2`, `prompts/user_turn.j2`
 - `main.py` updated to route through the agent loop instead of calling `fetch_page` directly
 
-### Why an LLM Agent Instead of Rule-Based Crawling
-
-- Rule-based crawlers follow all links matching a pattern — they cannot distinguish a relevant article from an irrelevant one with the same URL structure
-- Vietnamese finance sites mix article pages, tag pages, author pages, and ad-landing pages under the same domain — a URL pattern alone cannot filter these reliably
-- Claude reads the page content and link list, understands the goal, and picks only the links worth following — goal-directed reasoning replaces hand-coded heuristics
-- Hard constraints (depth, same-domain, robots.txt, page cap, token budget) remain enforced in code — Claude decides *which* links matter, the system decides *whether* they are allowed
-
 ### What Changed From Week 2
 
 - `src/prompts.py` — stub → Jinja2 template loader
@@ -67,8 +60,7 @@ flowchart TD
 
 ### This Report
 
-- Documents the Week 3 implementation: agent architecture, prompt design, tool definitions, guardrail model, and how each piece fits together
-- Framework used: **raw Anthropic Python SDK** — no LangChain, LangGraph, or agent framework; the loop is hand-rolled for full control
+- Documents the Week 3 implementation: agent architecture, prompt design, tool definitions, guardrail model, and how each piece fits together; framework used is the raw Anthropic Python SDK with no agent framework
 
 ---
 
@@ -79,18 +71,6 @@ flowchart TD
 - Define three Claude tools: `add_to_frontier`, `mark_visited`, `finish`
 - Enforce hard guardrails in code: depth ceiling, same-domain filter, URL deduplication, max-pages cap, token budget
 - Wire `main.py` to route through `run_agent` and surface per-page progress + final run statistics
-
----
-
-## Framework Decision: Raw Anthropic SDK
-
-- **No agent framework used** — the loop is built directly on `anthropic.messages.create()` with tool use
-- Reasons:
-  - All guardrails (depth, same-domain, robots, page cap, token budget) are enforced in plain Python — no framework abstraction hides them
-  - The full loop is visible in one file (`src/agent.py`) — easier to debug and extend
-  - The intern plan describes the Observe → Decide → Act cycle as something to build, not something to import
-  - The Anthropic SDK tool-use pattern covers everything needed at MVP scope
-- Tradeoff: features like parallel agent tasks or built-in memory would need to be added manually; a framework like LangGraph would provide them out of the box — acceptable for this project's scope
 
 ---
 
@@ -115,13 +95,19 @@ render(template_name: str, **context: object) -> str
 
 ---
 
-## Prompt Templates
+## Module: `prompts/system.j2`
 
-### `prompts/system.j2` — System Prompt
+### Design Decisions
 
-Rendered **once per crawl run** and cached with `cache_control: ephemeral` on every Claude API call to reduce cost.
+- **Rendered once per crawl run** — cached with `cache_control: ephemeral` on every Claude API call to reduce cost
+- **Today's date shown at top** — lets Claude evaluate "latest" relative to a real date
+- **Goal injected after the date** — Claude anchors all decisions to it
+- **Hard constraints block labelled "enforced by the system"** — depth, max pages, same-domain shown so Claude does not waste reasoning on them
+- **Crawl guidelines** — prefer article pages, skip irrelevant pages, call `finish` early, use URL-embedded dates to skip old articles
 
-**Injected variables:**
+### Public Interface
+
+Injected variables (rendered into the system prompt):
 
 | Variable | Source | Description |
 |---|---|---|
@@ -131,18 +117,21 @@ Rendered **once per crawl run** and cached with `cache_control: ephemeral` on ev
 | `max_pages` | `AgentConfig.max_pages` | Hard page cap |
 | `same_domain` | `AgentConfig.same_domain` | Whether to restrict to seed domain |
 
-**Contents:**
-- Agent role definition: receives one page at a time, calls tools, does not fetch
-- Today's date: shown at top so Claude can evaluate "latest" relative to a real date
-- Goal injection: shown after date so Claude anchors all decisions to it
-- Hard constraints block: depth, max pages, same-domain — labelled "enforced by the system" so Claude does not waste reasoning on them
-- Crawl guidelines: prefer article pages, skip irrelevant pages, call `finish` early, use URL-embedded dates to skip old articles
+---
 
-### `prompts/user_turn.j2` — Per-Page User Turn
+## Module: `prompts/user_turn.j2`
 
-Rendered **once per page** with live crawl state injected so Claude always sees current progress.
+### Design Decisions
 
-**Injected variables:**
+- **Rendered once per page** — live crawl state injected so Claude always sees current progress
+- **Markdown capped at 6,000 chars** — balances context quality against token cost; long articles are readable at this limit
+- **Links capped at 40** — enough for Claude to decide on a typical news page; avoids bloating the prompt on heavily-linked index pages
+- **Live crawl state counters at the bottom** — Claude can see when the budget is near and call `finish` earlier
+- **`frontier_reachable` shown separately from `frontier_count`** — Claude needs to know how many URLs it can still reach at the current depth ceiling, not just how many are queued total
+
+### Public Interface
+
+Injected variables (rendered into each per-page user turn):
 
 | Variable | Source | Description |
 |---|---|---|
@@ -159,15 +148,16 @@ Rendered **once per page** with live crawl state injected so Claude always sees 
 | `tokens_used` | `state.tokens_used` | Running token total |
 | `token_budget` | `AgentConfig.token_budget` | Budget ceiling |
 
-**Design notes:**
-- Markdown capped at 6,000 chars — balances context quality against token cost; long articles are readable at this limit
-- Links capped at 40 — enough for Claude to make decisions on a typical news page; avoids bloating the prompt on heavily-linked index pages
-- Live crawl state counters at the bottom — Claude can see when the budget is near and call `finish` earlier
-- `frontier_reachable` shown separately from `frontier_count` — Claude needs to know how many URLs it can still reach at the current depth ceiling, not just how many are queued total
-
 ---
 
 ## Module: `src/agent.py`
+
+### Design Decisions
+
+- **Why an LLM agent instead of rule-based crawling** — rule-based crawlers follow all links matching a pattern and cannot distinguish a relevant article from an irrelevant one with the same URL structure; Vietnamese finance sites mix article, tag, author, and ad-landing pages under one domain, so a URL pattern alone cannot filter them; Claude reads page content and the link list, understands the goal, and picks only links worth following
+- **Raw Anthropic SDK, no agent framework** — the loop is built directly on `anthropic.messages.create()` with tool use; all guardrails (depth, same-domain, robots, page cap, token budget) are enforced in plain Python with no framework abstraction hiding them, and the full loop is visible in one file for easier debugging
+- **Tradeoff accepted** — parallel agent tasks or built-in memory would need to be added manually; a framework like LangGraph would provide them out of the box, but that is unnecessary at MVP scope
+- **Hard constraints enforced in code, not by Claude** — Claude decides *which* links matter; the system decides *whether* they are allowed
 
 ### `AgentConfig`
 
@@ -180,14 +170,14 @@ class AgentConfig(BaseModel):
     same_domain: bool = True
     include_patterns: list[str] = Field(default_factory=list)
     exclude_patterns: list[str] = Field(default_factory=list)
-    model: str = "claude-sonnet-4-6"
-    extract_prompt: str = ""
-    extract_schema: dict | None = None
+    model: str = "claude-haiku-4-5-20251001"   # module-level MODEL constant
+    extract_prompt: str = ""                    # added Week 4 — see below
+    extract_schema: dict | None = None          # added Week 4 — see below
 ```
 
 - Pydantic `BaseModel` — field validation and type coercion on construction
-- `model` is a field so the model can be swapped without touching agent logic
-- `extract_prompt` and `extract_schema` added in Week 4 for structured extraction
+- `model` is a field so the model can be swapped without touching agent logic; the default is the module-level `MODEL` constant (`claude-haiku-4-5-20251001`)
+- `extract_prompt` and `extract_schema` are **not part of the Week 3 toolset** — they were added in Week 4 for structured extraction and are shown here only because the model is the current Pydantic definition; Week 3 shipped without them
 
 ### `CrawlState`
 
@@ -292,7 +282,7 @@ run_agent(seed_url, config):
 
 ---
 
-## Module: `main.py` Updates
+## Module: `main.py`
 
 ### New Flags Added
 
@@ -370,11 +360,7 @@ uv run python main.py https://cafef.vn \
 
 **Observation (2026-05-29):** Agent called `finish` after depth 0 without fetching the 5 queued depth-1 articles — judged homepage titles sufficient to satisfy "collect the latest economy news headlines". Recorded as expected behaviour at the time.
 
----
-
-### Re-run and Bug Fixes (2026-06-03)
-
-Re-running the smoke test revealed two bugs.
+**Re-run and bug fixes (2026-06-03):** re-running the smoke test revealed two bugs.
 
 **Bug 1 — Premature `finish` with reachable URLs still in frontier**
 
@@ -403,7 +389,7 @@ Root cause: `system.j2` did not inject the current date. Claude cannot evaluate 
 
 Fix — `run_agent` now passes `today=date.today().isoformat()` to `render("system.j2", ...)`. The template renders `Today's date: YYYY-MM-DD` at the top of the system prompt. A guideline was also added explaining that Vietnamese news URLs embed a publish date (e.g. `188260603...` → 2026-06-03) which Claude should use to skip old articles.
 
-**Re-run result (2026-06-03, after fixes):**
+**Re-run actual output (2026-06-03, after fixes):**
 
 ```
 [crawl-tool] seed=https://cafef.vn  depth=1  max_pages=5
@@ -420,7 +406,7 @@ Fix — `run_agent` now passes `today=date.today().isoformat()` to `render("syst
 
 All 5 URLs embed `260602` (2026-06-02) — no stale articles. Stop reason: `max_pages`.
 
-**Updated acceptance criteria:**
+**Acceptance criteria (2026-06-03, after fixes):**
 
 | Check | Expected | Actual |
 |---|---|---|
@@ -438,14 +424,16 @@ All 5 URLs embed `260602` (2026-06-02) — no stale articles. Stop reason: `max_
 - **`fetch_page` opens a new browser per URL** — `AsyncWebCrawler` starts and closes Playwright for every call; on a 50-page crawl this adds ~4s overhead per page; Week 4 should investigate a persistent browser session
 - **BFS only** — frontier is a FIFO list; no priority ordering; Claude may enqueue less-relevant pages ahead of more-relevant ones at the same depth
 - **No extraction yet** — agent reads pages and follows links but does not extract structured fields; `extract(prompt, schema)` tool comes in Week 4
-- **`--date-filter` flag not wired** — accepted by CLI but not passed to `AgentConfig` or the agent; hard date-range filtering is not enforced in code; Claude uses today's date (injected via system prompt) to reason about recency, but this relies on Claude's judgement rather than a code guardrail
-- **System prompt not tested for prompt injection** — pages from untrusted sites are inserted into the user turn; malicious page content could attempt to alter agent behaviour; sanitisation not yet implemented
+- **`--date-filter` flag not wired** — accepted by CLI but not passed to `AgentConfig` or the agent; hard date-range filtering is not enforced in code; Claude uses today's date (injected via system prompt) to reason about recency, but this relies on Claude's judgement rather than a code guardrail; wired in Week 5
+- **System prompt not tested for prompt injection** — pages from untrusted sites are inserted into the user turn; malicious page content could attempt to alter agent behaviour; sanitisation not yet scheduled
 
 ---
 
 ## Dependency Changes
 
-No new dependencies added in Week 3. All required packages (`anthropic`, `jinja2`) were already in `pyproject.toml` from Week 1.
+| Change | Reason |
+|---|---|
+| No new dependencies | `anthropic` and `jinja2` were already in `pyproject.toml` from Week 1 |
 
 ---
 
@@ -461,3 +449,5 @@ No new dependencies added in Week 3. All required packages (`anthropic`, `jinja2
 - [ ] Extraction prompt template added to `prompts/`
 - [ ] `--extract-prompt` and `--extract-schema` flags wired through to extractor
 - [ ] Per-page extraction errors surfaced in output but do not abort the crawl
+</content>
+</invoke>

@@ -57,7 +57,7 @@ flowchart TD
 
 ### This Report
 
-- Documents Week 4 implementation: extractor design, prompt templates, agent tool wiring, Pydantic migration
+- Documents Week 4 implementation: extractor design, prompt templates, agent tool wiring, and the Pydantic migration
 
 ---
 
@@ -80,7 +80,7 @@ flowchart TD
 - **Validation with `jsonschema`** — Claude output is parsed as JSON then validated against the schema; both parse errors and schema violations are caught and surfaced as error dicts
 - **Extraction stored in `page.metadata`** — result attached to `page.metadata["extracted"]` or `page.metadata["extraction_error"]`; no new fields added to `PageResult`
 
-### `infer_schema`
+### Public Interface
 
 ```python
 async def infer_schema(prompt: str) -> dict
@@ -96,15 +96,13 @@ async def infer_schema(prompt: str) -> dict
   - Recurses into nested `properties` and array `items` (Rev 5) — a null inside an array-of-objects field (e.g. `key_financial_figures[].label`) previously failed validation because only top-level types were made nullable
 - Strips markdown code fences (` ```json ... ``` `) that Claude sometimes adds despite instructions
 
-### `extract`
-
 ```python
 async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> dict
 ```
 
 - Returns `{"error": "page has no markdown content", "raw": ""}` immediately if `page.markdown` is empty
 - Calls `infer_schema(prompt)` when `schema` is `None`
-- Prepends a title + publish-date header to the markdown before extraction (Rev 5) — `# {page.title}` plus `Published: {detect_page_date(page)}`; both the H1 and the date live outside the scoped article body, so without this injection Claude returns `null` for title and date on article-body fetches
+- Prepends a title + publish-date header to the markdown before extraction (Rev 5) — `# {page.title}` plus `Published: {detect_page_date(page)}`; on the CafeF/TuoiTre scoped article bodies the H1 and date can sit outside the selected body element, so without this injection Claude returns `null` for title and date on those article-body fetches
 - Uses `detect_page_date` (from `src/date_filter.py`) as the single source of truth for the date — metadata, then header, then URL pattern — so the date is correct even when the page exposes no date meta tag
 - Renders `prompts/extract.j2` with `markdown`, `prompt`, and `schema_json`
 - Parses Claude's response as JSON; returns error dict on `JSONDecodeError`
@@ -118,17 +116,9 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 
 ---
 
-## Prompt Templates
+## Module: `prompts/extract.j2`
 
-### `prompts/extract.j2`
-
-**Injected variables:**
-
-| Variable | Source | Description |
-|---|---|---|
-| `prompt` | `AgentConfig.extract_prompt` or tool input | What fields to extract |
-| `schema_json` | `AgentConfig.extract_schema` or inferred, JSON-encoded | JSON Schema for output validation |
-| `markdown` | title/date header + `page.markdown` | Page content — truncated to 12,000 chars |
+### Design Decisions
 
 - Instructs Claude to respond with raw JSON only — no code fences, no explanation
 - Schema shown inline so Claude's output matches the expected structure
@@ -136,21 +126,45 @@ async def extract(page: PageResult, prompt: str, schema: dict | None = None) -> 
 - Instructs Claude to use the exact property names from the schema (Rev 5) — a second guard against key drift, complementing snake_case enforcement in `infer_schema.j2`
 - Truncation raised from 6,000 → 12,000 chars: on CafeF article pages the main article H1 starts at ~6,400 chars due to the sidebar news ticker, so 6,000 chars cut off before the article body began; with article-body scoping (Rev 5, see `src/crawler.py`) the markdown is now ~2,500–4,500 chars and truncation rarely triggers
 
-### `prompts/infer_schema.j2`
+### Public Interface
 
-**Injected variables:**
+Injected variables (rendered into the extraction user turn):
 
 | Variable | Source | Description |
 |---|---|---|
-| `prompt` | user's extraction prompt | Natural-language field description |
+| `prompt` | `AgentConfig.extract_prompt` or tool input | What fields to extract |
+| `schema_json` | `AgentConfig.extract_schema` or inferred, JSON-encoded | JSON Schema for output validation |
+| `markdown` | title/date header + `page.markdown` | Page content — truncated to 12,000 chars |
+
+---
+
+## Module: `prompts/infer_schema.j2`
+
+### Design Decisions
 
 - Instructs Claude to generate a minimal JSON Schema — only fields mentioned in the prompt
 - Requires `type: object` and a `properties` block at minimum
 - Requires snake_case property names (Rev 5) — keeps field naming consistent across every article in a run
 
+### Public Interface
+
+Injected variables (rendered into the schema-inference user turn):
+
+| Variable | Source | Description |
+|---|---|---|
+| `prompt` | user's extraction prompt | Natural-language field description |
+
 ---
 
-## Module: `src/agent.py` Updates
+## Module: `src/agent.py`
+
+### Design Decisions
+
+- **`extract` tool added to the toolset** — Claude can trigger structured extraction per page; `schema` is optional and falls back to `AgentConfig.extract_schema` then to inference; results land in `page.metadata["extracted"]` or `page.metadata["extraction_error"]`
+- **`_execute_tool` made `async`** — to support `await extractor_extract(...)`
+- **Auto-extraction fallback** — guarantees every article page is extracted even when Claude's tool-use is inconsistent
+- **Schema inferred once per run** — one shared schema keeps field naming consistent across every page
+- **Pydantic migration** — all three data models moved from `@dataclass` to `BaseModel` for field validation and cleaner serialisation
 
 ### `extract` Tool
 
@@ -204,9 +218,7 @@ This guarantees every article page is extracted even when Claude's tool-use is i
 - Conditional `{% if extract_prompt %}` block injected when `extract_prompt` is non-empty
 - Instructs agent to call `extract` on every article page before deciding which links to follow
 
----
-
-## Pydantic Migration
+### Pydantic Migration
 
 All three data models migrated from `@dataclass` to Pydantic `BaseModel`:
 
@@ -220,7 +232,9 @@ All three data models migrated from `@dataclass` to Pydantic `BaseModel`:
 
 ---
 
-## Module: `main.py` Updates
+## Module: `main.py`
+
+### Design Decisions
 
 - `--extract-schema` reads JSON from file path; validates file exists before starting the crawl
 - `--extract-prompt` and loaded schema wired into `AgentConfig.extract_prompt` and `AgentConfig.extract_schema`
@@ -279,8 +293,8 @@ uv run python main.py https://cafef.vn \
 |---|---|---|
 | Consistent snake_case keys | `publish_date`, not mixed `publishDate` | ✓ — snake_case on every page across all three sites |
 | Nested null allowed | `key_financial_figures[].label = null` validates | ✓ — recursive `_make_nullable` accepts nested nulls |
-| Title populated under article-body scoping | `title` non-null even though H1 is outside the body | ✓ — header injection supplies `# {page.title}` |
-| Publish date populated | `publish_date` resolved without a date meta tag | ✓ — `2026-06-04` from URL pattern (CafeF/TuoiTre), body text (VnEconomy) |
+| Title populated under article-body scoping | `title` non-null even when the H1 sits outside the scoped body (CafeF/TuoiTre) | ✓ — header injection supplies `# {page.title}` |
+| Publish date populated | `publish_date` resolved from the page's own signals | ✓ — `2026-06-04` from the URL date pattern (CafeF/TuoiTre) and the `article:published_time` meta tag (VnEconomy) |
 | Full-page links preserved | Article fetch keeps nav links for the frontier | ✓ — 56/179/116 internal links via `target_elements` scoping |
 
 ---
@@ -292,13 +306,15 @@ uv run python main.py https://cafef.vn \
 - **No retry on extraction failure** — if Claude returns malformed JSON, the error is recorded and the page moves on; no retry attempt; acceptable at MVP scope
 - **~~Extraction not date-filtered~~** — RESOLVED (Week 5): the agent loop drops article pages outside the date range before extraction; see the Week 5 report
 - **~~Sidebar dominates early markdown~~** — RESOLVED (Rev 5): article-body scoping via Crawl4AI `target_elements` (per-domain selector map in `src/crawler.py`) returns ~2,500–4,500 chars of clean article body, cutting 60–82% of tokens, while keeping head metadata (title, date) and full-page links intact; the 12,000-char truncation now rarely triggers
-- **Publish date precision** — `detect_page_date` resolves date only (no time); adequate for a publish-date field but not for intraday ordering
+- **Publish date precision** — `detect_page_date` resolves date only (no time); adequate for a publish-date field but not for intraday ordering; not yet scheduled
 
 ---
 
 ## Dependency Changes
 
-No new dependencies added in Week 4. `jsonschema` and `pydantic` were already in `pyproject.toml` from Week 1.
+| Change | Reason |
+|---|---|
+| No new dependencies | `jsonschema` and `pydantic` were already in `pyproject.toml` from Week 1 |
 
 ---
 
@@ -316,3 +332,5 @@ This checklist is the original Week-4 forecast and is kept as a historical snaps
 - [ ] `--date-filter` and `--include-undated` flags wired
 - [ ] Retry policy in `fetch_page` — exponential backoff on 5xx/timeout, max 3 retries
 - [ ] Structured per-page logging — URL, status, depth, fetch time
+</content>
+</invoke>

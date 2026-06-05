@@ -35,13 +35,16 @@ Every document begins with this block — no content before it:
 **Revision history:**
 - Initial draft: <one-line description>
 - Rev 2: <what changed>
+
+**commit:** [link](<commit-url>)
 ```
 
 Rules:
 
 - `**Prepared:**` is the date the initial draft was written — never updated
-- Each revision is one line: `- Rev N (YYYY-MM-DD): <what changed>` for revisions after the initial draft
+- Each revision is one line: `- Rev N: <what changed>` for revisions after the initial draft; a `(YYYY-MM-DD)` prefix after the number is optional — include it when the date adds value, omit it otherwise
 - The initial draft line has no date prefix
+- `**commit:**` is the only optional metadata field allowed; place it as the last line of the header block, after the revision history, and link to the commit that introduced the document's current state
 - No other metadata fields in the header block
 
 ---
@@ -205,11 +208,12 @@ Cell content: one phrase — not a full sentence, not a paragraph.
 ```markdown
 **Revision history:**
 - Initial draft: <one-line summary of what the initial draft covered>
-- Rev 2 (YYYY-MM-DD): <what changed and why>
+- Rev 2: <what changed and why>
 - Rev 3 (YYYY-MM-DD): <what changed and why>
 ```
 
 - Revision numbers are sequential integers starting at 2 (the initial draft is not numbered)
+- The `(YYYY-MM-DD)` date prefix is optional on each revision line — both `- Rev N:` and `- Rev N (YYYY-MM-DD):` are valid; do not mix arbitrarily, but a report may date later revisions and leave earlier ones undated
 - Each revision line is one sentence maximum
 - Historical reports must not be rewritten — add a revision entry instead
 
