@@ -57,7 +57,7 @@ main.py → run_agent() → fetch_page() → _agent_turn() → Claude API
 - Ruff: line-length 100, rules E/F/I/UP/B/SIM (configured in `pyproject.toml`)
 - All public functions require type hints; use `X | Y` not `Optional[X]`
 - All I/O is `async`; use `AsyncAnthropic` and `AsyncWebCrawler` — never sync equivalents
-- Models default to `claude-sonnet-4-6` (agent) and `claude-haiku-4-5-20251001` (extractor)
+- Models default to `claude-haiku-4-5-20251001` (agent and extractor)
 - `ANTHROPIC_API_KEY` must be set in environment or `.env`
 
 ## Git
