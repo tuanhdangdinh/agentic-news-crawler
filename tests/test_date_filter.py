@@ -41,6 +41,12 @@ def _page(url: str = "https://cafef.vn", metadata: dict | None = None, headers: 
         ("since 2026-06-01", date(2026, 6, 1), date(2026, 6, 4)),
         ("between 2026-05-01 and 2026-06-01", date(2026, 5, 1), date(2026, 6, 1)),
         ("2026-06-04", date(2026, 6, 4), date(2026, 6, 4)),
+        # Natural-language dates via dateparser fallback
+        ("since June 1st", date(2026, 6, 1), date(2026, 6, 4)),
+        ("since June 1 2026", date(2026, 6, 1), date(2026, 6, 4)),
+        ("between May 1 2026 and June 1 2026", date(2026, 5, 1), date(2026, 6, 1)),
+        ("June 1 2026", date(2026, 6, 1), date(2026, 6, 1)),
+        ("1 June 2026", date(2026, 6, 1), date(2026, 6, 1)),
     ],
 )
 def test_parse_date_filter(prompt: str, expected_from: date, expected_to: date):
@@ -49,9 +55,10 @@ def test_parse_date_filter(prompt: str, expected_from: date, expected_to: date):
     assert to_date == expected_to
 
 
-def test_parse_date_filter_raises_on_unrecognised_prompt():
+@pytest.mark.parametrize("prompt", ["next quarter", "sometime recently", "gibberish xyz", ""])
+def test_parse_date_filter_raises_on_unrecognised_prompt(prompt: str):
     with pytest.raises(ValueError, match="cannot parse date filter"):
-        parse_date_filter("next quarter", today=_TODAY)
+        parse_date_filter(prompt, today=_TODAY)
 
 
 def test_detect_page_date_from_article_published_time():

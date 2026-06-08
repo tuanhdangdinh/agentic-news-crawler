@@ -7,7 +7,38 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
+import dateparser
+
 from src.models import PageResult
+
+
+def _parse_one_date(token: str, today: date) -> date:
+    """Parse a single date token, ISO first then natural language.
+
+    ISO ``YYYY-MM-DD`` is tried directly so the common case stays deterministic
+    and fast. Anything else (``June 1st``, ``1 June 2026``, ``1 tháng 6``) falls
+    back to ``dateparser`` with ``today`` as the relative base.
+
+    Raises:
+        ValueError: If the token cannot be resolved to a date.
+    """
+    token = token.strip()
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        pass
+
+    parsed = dateparser.parse(
+        token,
+        settings={
+            "RELATIVE_BASE": datetime(today.year, today.month, today.day),
+            "PREFER_DATES_FROM": "past",
+            "RETURN_AS_TIMEZONE_AWARE": False,
+        },
+    )
+    if parsed is None:
+        raise ValueError(f"cannot parse date: {token!r}")
+    return parsed.date()
 
 
 @dataclass
@@ -79,23 +110,28 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
         yesterday = today - timedelta(days=1)
         return (yesterday, yesterday)
 
-    # "since YYYY-MM-DD" — open upper bound treated as today
-    m = re.match(r"since\s+(\d{4}-\d{2}-\d{2})$", text)
+    # "since <date>" — open upper bound treated as today (e.g. "since June 1st")
+    m = re.match(r"since\s+(.+)$", text)
     if m:
-        return (date.fromisoformat(m.group(1)), today)
+        try:
+            return (_parse_one_date(m.group(1), today), today)
+        except ValueError:
+            raise ValueError(f"cannot parse date filter: {prompt!r}") from None
 
-    # "between YYYY-MM-DD and YYYY-MM-DD"
-    m = re.match(r"between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})$", text)
+    # "between <date> and <date>"
+    m = re.match(r"between\s+(.+?)\s+and\s+(.+)$", text)
     if m:
-        return (date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2)))
+        try:
+            return (_parse_one_date(m.group(1), today), _parse_one_date(m.group(2), today))
+        except ValueError:
+            raise ValueError(f"cannot parse date filter: {prompt!r}") from None
 
-    # "YYYY-MM-DD"
-    m = re.match(r"(\d{4}-\d{2}-\d{2})$", text)
-    if m:
-        d = date.fromisoformat(m.group(1))
-        return (d, d)
-
-    raise ValueError(f"cannot parse date filter: {prompt!r}")
+    # Bare single date — "2026-06-04", "June 1st", "1 thang 6"
+    try:
+        d = _parse_one_date(text, today)
+    except ValueError:
+        raise ValueError(f"cannot parse date filter: {prompt!r}") from None
+    return (d, d)
 
 
 def detect_page_date(page: PageResult) -> date | None:
