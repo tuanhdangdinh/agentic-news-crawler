@@ -39,6 +39,9 @@ output/
 playwright-report/
 test-results/
 
+# Crawl4AI cache
+.crawl4ai/
+
 # OS
 .DS_Store
 Thumbs.db
