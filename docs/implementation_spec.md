@@ -421,7 +421,8 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
 | `today` | `date \| None` | Override for the current date — used in tests to fix the reference point. |
 
 - Converts a user-provided date filter into an inclusive `(from_date, to_date)` range
-- Supported patterns: `"last N days/weeks/months"`, `"last week/month/year"`, `"this week/month/year"`, `"today"`, `"yesterday"`, `"since YYYY-MM-DD"`, `"between YYYY-MM-DD and YYYY-MM-DD"`, `"YYYY-MM-DD"`
+- Supported patterns: `"last N days/weeks/months"`, `"last week/month/year"`, `"this week/month/year"`, `"today"`, `"yesterday"`, `"since <date>"`, `"between <date> and <date>"`, `"<date>"`
+- A `<date>` token is parsed ISO-first (`YYYY-MM-DD`) then via a `dateparser` fallback, so natural-language dates (`"June 1st"`, `"1 June 2026"`) are accepted as well as ISO
 - `"since YYYY-MM-DD"` treats today as the upper bound — returns `(parsed_date, today)`
 - Raises `ValueError` for empty, ambiguous, or unparseable input instead of guessing
 
