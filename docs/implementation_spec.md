@@ -235,7 +235,7 @@ def render(template_name: str, **context: object) -> str
 | `same_domain` | `bool` | `True` | Restrict crawl to seed domain |
 | `include_patterns` | `list[str]` | `[]` | Glob patterns URLs must match |
 | `exclude_patterns` | `list[str]` | `[]` | Glob patterns that block a URL |
-| `model` | `str` | `"claude-sonnet-4-6"` | Anthropic model ID |
+| `model` | `str` | `"claude-haiku-4-5-20251001"` | Anthropic model ID |
 
 Week 4 adds `extract_prompt` and `extract_schema`. Week 5 adds `date_filter` and `include_undated` — see those sections.
 
@@ -372,7 +372,7 @@ async def infer_schema(prompt: str) -> dict
 - `_validate` — runs `jsonschema.validate`, returns `(True, "")` on pass or `(False, error_message)` on fail
 
 **Prompt templates added:**
-- `prompts/extract.j2` — user turn for structured extraction; variables: `markdown`, `prompt`, `schema`
+- `prompts/extract.j2` — user turn for structured extraction; variables: `markdown`, `prompt`, `schema_json`
 - `prompts/infer_schema.j2` — user turn for schema inference; variable: `prompt`
 
 ---
