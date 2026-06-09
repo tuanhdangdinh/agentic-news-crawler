@@ -249,7 +249,7 @@ uv run python main.py https://cafef.vn \
 
 ## Known Limitations
 
-- **NL parser is regex-only** — compound expressions like `"articles from last week about banks"` are not parsed; the date filter must be a standalone phrase; deferred — a dateparser library integration could be added in a later week
+- **NL parser handles standalone phrases only** — single-date tokens are parsed ISO-first then via a `dateparser` fallback (Rev 2), so `"since June 1st"` / `"1 June 2026"` now work; what remains unparsed is compound expressions like `"articles from last week about banks"` where the date is embedded in a sentence — the filter must still be a standalone phrase
 - **Vietnamese URL pattern assumes 2000s dates** — the regex extracts `YY` and prepends `20`; URLs with dates in other centuries would be misclassified; acceptable for the current target site
 - **Date filter not applied to the seed page** — the seed URL is always fetched regardless of date; only article-classified pages are filtered; by design, since the seed is needed for navigation
 - **No schema for `detect_page_date` sources beyond metadata and headers** — JSON-LD blocks embedded in `<script>` tags are read from `page.metadata` only if Crawl4AI already parsed them; pages where JSON-LD is not surfaced in metadata go to URL-pattern detection; a proper JSON-LD parser is deferred
@@ -258,7 +258,7 @@ uv run python main.py https://cafef.vn \
 
 ## Dependency Changes
 
-No new dependencies added in Week 5. `src/date_filter.py` uses only stdlib (`re`, `datetime`, `email.utils`).
+No new project dependencies were added in Week 5 — the initial date filter used only stdlib (`re`, `datetime`, `email.utils`). Rev 2 (2026-06-08) added a `dateparser` import to `src/date_filter.py` for the natural-language fallback; `dateparser` was already declared in `pyproject.toml`, so no new package was pinned.
 
 ---
 

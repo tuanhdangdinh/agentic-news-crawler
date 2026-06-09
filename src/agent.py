@@ -130,6 +130,11 @@ class CrawlState(BaseModel):
     @computed_field
     @property
     def tokens_used(self) -> int:
+        """Return the total Anthropic API tokens used by the crawl.
+
+        Returns:
+            Sum of input and output tokens recorded in the crawl state.
+        """
         return self.total_input_tokens + self.total_output_tokens
 
 
@@ -485,11 +490,13 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
         state.pages.append(page)
         if _is_article_page(page):
             state.article_pages.append(page.final_url)
-        print(
-            f"  [{len(state.pages):>3}] depth={depth} "
-            f"chars={len(page.markdown):>6} "
-            f"links={len(page.links_internal):>3} "
-            f"{url}"
+        logger.info(
+            "page collected",
+            index=len(state.pages),
+            depth=depth,
+            chars=len(page.markdown),
+            links=len(page.links_internal),
+            url=url,
         )
 
         # DECIDE + ACT — agent chooses which links to follow

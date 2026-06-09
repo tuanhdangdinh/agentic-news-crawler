@@ -130,6 +130,12 @@ def article_selector_for_url(url: str) -> str | None:
 
     Known selectors are preferred over generic detection because they are cleaner
     and less likely to include sidebars or related links.
+
+    Args:
+        url: URL to match against known article patterns.
+
+    Returns:
+        Matching article-body selector, or None for an unknown URL.
     """
     parsed = urlparse(url)
     domain = parsed.netloc.removeprefix("www.")
@@ -141,7 +147,14 @@ def article_selector_for_url(url: str) -> str | None:
 
 
 def looks_like_article_url(url: str) -> bool:
-    """Return True when a URL matches known or generic article patterns."""
+    """Check whether a URL matches known or generic article patterns.
+
+    Args:
+        url: URL to classify.
+
+    Returns:
+        True when the URL appears to identify an article.
+    """
     if article_selector_for_url(url) is not None:
         return True
 
@@ -158,7 +171,14 @@ def looks_like_article_url(url: str) -> bool:
 
 
 def article_target_elements_for_url(url: str) -> list[str]:
-    """Return target_elements for an article URL, preferring known selectors."""
+    """Return target elements for an article URL.
+
+    Args:
+        url: URL used to select known or generic article targets.
+
+    Returns:
+        Preferred target selectors, or an empty list for a non-article URL.
+    """
     selector = article_selector_for_url(url)
     if selector is not None:
         return [selector]

@@ -18,6 +18,11 @@ logger = structlog.get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser.
+
+    Returns:
+        Configured argparse parser for the crawl-tool CLI.
+    """
     parser = argparse.ArgumentParser(
         prog="crawl-tool",
         description="Agent-driven LLM crawler with structured extraction.",
@@ -41,13 +46,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def run(args: argparse.Namespace) -> None:
+    """Run the crawler from parsed command-line arguments.
+
+    Args:
+        args: Parsed CLI arguments from build_parser.
+    """
     configure_logging(args.verbose)
 
     extract_schema = None
     if args.extract_schema:
         schema_path = Path(args.extract_schema)
         if not schema_path.exists():
-            print(f"[crawl-tool] error: --extract-schema file not found: {args.extract_schema}")
+            logger.error("extract schema file not found", path=args.extract_schema)
             return
         extract_schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
@@ -65,18 +75,24 @@ async def run(args: argparse.Namespace) -> None:
         include_undated=args.include_undated,
     )
 
-    print(f"[crawl-tool] seed={args.url}  depth={args.max_depth}  max_pages={args.max_pages}")
-    if args.goal:
-        print(f"[crawl-tool] goal: {args.goal}")
+    logger.info(
+        "crawl configured",
+        seed_url=args.url,
+        max_depth=args.max_depth,
+        max_pages=args.max_pages,
+        goal=args.goal or None,
+    )
 
     if not args.goal and not args.extract_prompt:
         logger.info("running direct single-page fetch")
         page = await fetch_page(args.url)
-        print(
-            f"  [  1] status={page.status_code} "
-            f"chars={len(page.markdown):>6} "
-            f"links={len(page.links_internal):>3} "
-            f"{args.url}"
+        logger.info(
+            "page fetched",
+            index=1,
+            status=page.status_code,
+            chars=len(page.markdown),
+            links=len(page.links_internal),
+            url=args.url,
         )
 
         run_meta = {
@@ -92,23 +108,27 @@ async def run(args: argparse.Namespace) -> None:
         }
         logger.info("writing output", format=args.format, path=args.output)
         write_results([page], args.output, fmt=args.format, run_meta=run_meta)
-        print(f"\n[crawl-tool] done — {1 if page.success else 0} pages  1 visited  0 tokens")
         if page.error:
-            print(f"[crawl-tool] fetch error: {page.error}")
-        print(f"[crawl-tool] output: {args.output}")
+            logger.warning("fetch error", error=page.error)
+        logger.info(
+            "crawl done",
+            pages=1 if page.success else 0,
+            visited=1,
+            tokens_used=0,
+            output=args.output,
+        )
         return
 
     logger.info("running agent crawl")
     state = await run_agent(args.url, config)
 
-    print(
-        f"\n[crawl-tool] done — "
-        f"{len(state.pages)} pages  "
-        f"{len(state.visited)} visited  "
-        f"{state.tokens_used:,} tokens"
+    logger.info(
+        "crawl done",
+        pages=len(state.pages),
+        visited=len(state.visited),
+        tokens_used=state.tokens_used,
+        finish_reason=state.finish_reason or None,
     )
-    if state.finish_reason:
-        print(f"[crawl-tool] finish reason: {state.finish_reason}")
 
     run_meta = {
         "seed_url": args.url,
@@ -128,10 +148,11 @@ async def run(args: argparse.Namespace) -> None:
 
     logger.info("writing output", format=args.format, path=args.output)
     write_results(state.pages, args.output, fmt=args.format, run_meta=run_meta)
-    print(f"[crawl-tool] output: {args.output}")
+    logger.info("output written", path=args.output, format=args.format)
 
 
 def main() -> None:
+    """Parse CLI arguments and run the async crawler entry point."""
     parser = build_parser()
     args = parser.parse_args()
     asyncio.run(run(args))

@@ -12,7 +12,12 @@ from src.models import PageResult
 _TODAY = date(2026, 6, 4)
 
 
-def _page(url: str = "https://cafef.vn", metadata: dict | None = None, headers: dict | None = None) -> PageResult:
+def _page(
+    url: str = "https://cafef.vn",
+    metadata: dict | None = None,
+    headers: dict | None = None,
+    html: str | None = None,
+) -> PageResult:
     return PageResult(
         url=url,
         final_url=url,
@@ -21,6 +26,7 @@ def _page(url: str = "https://cafef.vn", metadata: dict | None = None, headers: 
         markdown="content",
         metadata=metadata or {},
         headers=headers or {},
+        html=html,
     )
 
 
@@ -61,6 +67,24 @@ def test_parse_date_filter_raises_on_unrecognised_prompt(prompt: str):
         parse_date_filter(prompt, today=_TODAY)
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_from", "expected_to"),
+    [
+        ("articles from last week about banks", date(2026, 5, 28), date(2026, 6, 4)),
+        ("give me last 7 days of stock news", date(2026, 5, 28), date(2026, 6, 4)),
+        ("show me posts from this month please", date(2026, 6, 1), date(2026, 6, 4)),
+        ("anything posted today would be great", date(2026, 6, 4), date(2026, 6, 4)),
+        ("yesterday's banking headlines", date(2026, 6, 3), date(2026, 6, 3)),
+    ],
+)
+def test_parse_date_filter_finds_relative_phrase_in_compound_text(
+    prompt: str, expected_from: date, expected_to: date
+):
+    from_date, to_date = parse_date_filter(prompt, today=_TODAY)
+    assert from_date == expected_from
+    assert to_date == expected_to
+
+
 def test_detect_page_date_from_article_published_time():
     page = _page(metadata={"article:published_time": "2026-06-03T09:16:00+07:00"})
     assert detect_page_date(page) == date(2026, 6, 3)
@@ -74,6 +98,46 @@ def test_detect_page_date_from_og_updated_time():
 def test_detect_page_date_from_date_published():
     page = _page(metadata={"datePublished": "2026-05-30T12:00:00Z"})
     assert detect_page_date(page) == date(2026, 5, 30)
+
+
+def test_detect_page_date_from_json_ld_in_html():
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context": "https://schema.org", "@type": "NewsArticle", "datePublished": "2026-06-02T08:00:00+07:00"}
+    </script>
+    </head></html>
+    """
+    page = _page(html=html)
+    assert detect_page_date(page) == date(2026, 6, 2)
+
+
+def test_detect_page_date_from_json_ld_graph_array():
+    html = """
+    <script type="application/ld+json">
+    {"@graph": [{"@type": "WebPage"}, {"@type": "Article", "dateModified": "2026-05-29T12:00:00Z"}]}
+    </script>
+    """
+    page = _page(html=html)
+    assert detect_page_date(page) == date(2026, 5, 29)
+
+
+def test_detect_page_date_ignores_malformed_json_ld():
+    html = '<script type="application/ld+json">{not valid json</script>'
+    page = _page(url="https://cafef.vn/category", html=html)
+    assert detect_page_date(page) is None
+
+
+def test_detect_page_date_meta_takes_priority_over_json_ld():
+    html = '<script type="application/ld+json">{"datePublished": "2026-05-20T00:00:00Z"}</script>'
+    page = _page(metadata={"article:published_time": "2026-06-01T00:00:00Z"}, html=html)
+    assert detect_page_date(page) == date(2026, 6, 1)
+
+
+def test_detect_page_date_json_ld_takes_priority_over_header():
+    html = '<script type="application/ld+json">{"datePublished": "2026-05-25T00:00:00Z"}</script>'
+    page = _page(headers={"Last-Modified": "Wed, 03 Jun 2026 10:00:00 GMT"}, html=html)
+    assert detect_page_date(page) == date(2026, 5, 25)
 
 
 def test_detect_page_date_from_last_modified_header():

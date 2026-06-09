@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -10,6 +12,57 @@ from email.utils import parsedate_to_datetime
 import dateparser
 
 from src.models import PageResult
+
+# Relative-phrase patterns matched anywhere in the filter text (not anchored to
+# the full string) so compound filters like "articles from last week about
+# banks" resolve via the embedded "last week" phrase. Safe to search for
+# unanchored because none of these contain a free-form date token — unlike
+# "since <date>" / "between <date> and <date>", which keep requiring a
+# standalone phrase below.
+_LAST_N_RE = re.compile(r"\blast\s+(\d+)\s+(day|week|month)s?\b")
+_LAST_UNIT_RE = re.compile(r"\blast\s+(week|month|year)\b")
+_THIS_UNIT_RE = re.compile(r"\bthis\s+(week|month|year)\b")
+_TODAY_RE = re.compile(r"\btoday\b")
+_YESTERDAY_RE = re.compile(r"\byesterday\b")
+
+
+def _match_relative_phrase(text: str, today: date) -> tuple[date, date] | None:
+    """Find a relative date phrase anywhere in ``text`` and resolve its range.
+
+    Returns ``None`` if no relative phrase is present, so the caller can fall
+    back to the standalone absolute-date branches (``since``, ``between``, bare
+    date) which still require the filter to be just that phrase.
+    """
+    m = _LAST_N_RE.search(text)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        delta = {"day": timedelta(days=n), "week": timedelta(weeks=n), "month": timedelta(days=n * 30)}[unit]
+        return (today - delta, today)
+
+    m = _LAST_UNIT_RE.search(text)
+    if m:
+        delta = {"week": timedelta(weeks=1), "month": timedelta(days=30), "year": timedelta(days=365)}[m.group(1)]
+        return (today - delta, today)
+
+    m = _THIS_UNIT_RE.search(text)
+    if m:
+        unit = m.group(1)
+        if unit == "week":
+            start = today - timedelta(days=today.weekday())
+        elif unit == "month":
+            start = today.replace(day=1)
+        else:
+            start = today.replace(month=1, day=1)
+        return (start, today)
+
+    if _TODAY_RE.search(text):
+        return (today, today)
+
+    if _YESTERDAY_RE.search(text):
+        yesterday = today - timedelta(days=1)
+        return (yesterday, yesterday)
+
+    return None
 
 
 def _parse_one_date(token: str, today: date) -> date:
@@ -78,37 +131,11 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
         today = date.today()
     text = prompt.strip().lower()
 
-    # "last N days/weeks/months"
-    m = re.match(r"last\s+(\d+)\s+(day|week|month)s?$", text)
-    if m:
-        n, unit = int(m.group(1)), m.group(2)
-        delta = {"day": timedelta(days=n), "week": timedelta(weeks=n), "month": timedelta(days=n * 30)}[unit]
-        return (today - delta, today)
-
-    # "last week / month / year"
-    m = re.match(r"last\s+(week|month|year)$", text)
-    if m:
-        delta = {"week": timedelta(weeks=1), "month": timedelta(days=30), "year": timedelta(days=365)}[m.group(1)]
-        return (today - delta, today)
-
-    # "this week / month / year"
-    m = re.match(r"this\s+(week|month|year)$", text)
-    if m:
-        unit = m.group(1)
-        if unit == "week":
-            start = today - timedelta(days=today.weekday())
-        elif unit == "month":
-            start = today.replace(day=1)
-        else:
-            start = today.replace(month=1, day=1)
-        return (start, today)
-
-    if text == "today":
-        return (today, today)
-
-    if text == "yesterday":
-        yesterday = today - timedelta(days=1)
-        return (yesterday, yesterday)
+    # Relative phrases ("last 7 days", "this month", "today", ...) may be
+    # embedded in a larger sentence — search for them anywhere in the text.
+    relative = _match_relative_phrase(text, today)
+    if relative is not None:
+        return relative
 
     # "since <date>" — open upper bound treated as today (e.g. "since June 1st")
     m = re.match(r"since\s+(.+)$", text)
@@ -132,6 +159,54 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
     except ValueError:
         raise ValueError(f"cannot parse date filter: {prompt!r}") from None
     return (d, d)
+
+
+_JSON_LD_RE = re.compile(
+    r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _iter_json_ld_nodes(data: object) -> Iterator[dict]:
+    """Walk a parsed JSON-LD document, yielding every dict node including ``@graph`` members."""
+    if isinstance(data, dict):
+        yield data
+        graph = data.get("@graph")
+        if isinstance(graph, list):
+            for node in graph:
+                yield from _iter_json_ld_nodes(node)
+    elif isinstance(data, list):
+        for node in data:
+            yield from _iter_json_ld_nodes(node)
+
+
+def _extract_json_ld_date(html: str | None) -> date | None:
+    """Parse ``datePublished``/``dateModified`` directly out of JSON-LD ``<script>`` blocks.
+
+    Crawl4AI only promotes JSON-LD fields into ``page.metadata`` when its own
+    heuristics recognise them; pages where it doesn't still carry the raw
+    ``<script type="application/ld+json">`` blocks in ``page.html``, so this
+    scans those directly as a fallback before giving up on explicit signals.
+    """
+    if not html:
+        return None
+
+    for block in _JSON_LD_RE.findall(html):
+        try:
+            data = json.loads(block.strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        for node in _iter_json_ld_nodes(data):
+            for key in ("datePublished", "dateModified"):
+                raw = node.get(key)
+                if raw:
+                    try:
+                        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+                    except (ValueError, AttributeError):
+                        continue
+
+    return None
 
 
 def detect_page_date(page: PageResult) -> date | None:
@@ -158,6 +233,10 @@ def detect_page_date(page: PageResult) -> date | None:
                 return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
             except (ValueError, AttributeError):
                 pass
+
+    json_ld_date = _extract_json_ld_date(page.html)
+    if json_ld_date is not None:
+        return json_ld_date
 
     # HTTP Last-Modified header (lowest priority among explicit signals)
     headers = page.headers or {}
