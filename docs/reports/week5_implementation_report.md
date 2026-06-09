@@ -6,6 +6,7 @@
 - Initial draft: date filter module, retry policy in crawler, agent loop integration, CLI flags, test suite expansion
 - Rev 2 (2026-06-08): `parse_date_filter` extended with a `dateparser` fallback — natural-language date tokens (`"since June 1st"`, `"1 June 2026"`) are now accepted alongside ISO `YYYY-MM-DD`; date-filter tests expanded
 - Rev 3 (2026-06-09): Vietnamese URL century assumption resolved — `_resolve_2digit_year` prefers 2000s, falls back to 1900s, returns `None` when neither fits the plausible news window; 4 new tests added
+- Rev 4 (2026-06-09): Added missing `src/logging_config.py` section (Week 5 deliverable not yet documented); updated test counts to reflect delivery state; updated Week 6 entry criteria
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/6adf41d3eda0315810dba0fc11da56d534c160a9)
 
@@ -18,14 +19,16 @@
 - Week 4 extracted structured data from pages — Week 5 makes results time-scoped: only pages whose publish date falls within a user-specified range are collected
 - `src/date_filter.py` parses natural-language date filters and detects publish dates from page metadata, HTTP headers, and URL patterns
 - `src/crawler.py` gains a retry policy: exponential backoff on 5xx and exception, `Retry-After`-aware handling for 429
-- Test suite reorganised and expanded from 4 monolithic files into 17 focused modules; 115 tests pass
+- `src/logging_config.py` configures structlog with JSON output; per-page, retry, and date-drop events logged at INFO/WARNING throughout the agent and crawler
+- Test suite reorganised and expanded from 4 monolithic files into 17 focused modules; 115 tests pass at initial delivery (189 at end of Week 6 including all subsequent additions)
 
 ### What Changed From Week 4
 
 - `src/date_filter.py` — stub → `parse_date_filter()`, `detect_page_date()`, `is_in_range()` implementation
 - `src/crawler.py` — single-attempt fetch → 3-attempt retry with exponential backoff and 429 handling
 - `src/agent.py` — `AgentConfig` gains `date_filter` and `include_undated` fields; `run_agent()` drops article pages outside the resolved date range
-- `main.py` — `--date-filter` and `--include-undated` flags wired into `AgentConfig`
+- `src/logging_config.py` — new module; configures structlog JSON pipeline; `configure_logging(verbose)` sets INFO/DEBUG threshold
+- `main.py` — `--date-filter` and `--include-undated` flags wired into `AgentConfig`; `configure_logging` called at startup
 - `tests/` — 4 old monolithic test files deleted; 17 focused test modules added covering agent helpers, `run_agent`, `_execute_tool` variants, `fetch_page`, `date_filter`, `extractor`, output writers, prompts, and CLI parser
 
 ### Data Flow This Week
@@ -37,6 +40,7 @@ flowchart TD
     FILTER["src/date_filter.py <br> parse_date_filter · detect_page_date · is_in_range"]
     CRAWLER["src/crawler.py <br> fetch_page — retry loop"]
     PAGE["PageResult <br> headers · metadata · final_url"]
+    LOG["src/logging_config.py <br> structlog JSON pipeline"]
 
     CLI -->|"date_filter string"| AGENT
     AGENT -->|"resolve once"| FILTER
@@ -46,6 +50,8 @@ flowchart TD
     CRAWLER -->|"429/5xx retry"| CRAWLER
     CRAWLER -->|"PageResult"| PAGE
     PAGE -->|"metadata · headers · final_url"| FILTER
+    AGENT -->|"logger calls"| LOG
+    CRAWLER -->|"retry warnings"| LOG
 ```
 
 ### This Report
@@ -62,7 +68,8 @@ flowchart TD
 - Wire date filter into `run_agent()` — article pages outside range are dropped before being appended to `state.pages`
 - Add `--date-filter` and `--include-undated` CLI flags
 - Add exponential backoff retry to `fetch_page` — max 3 attempts, handles 429 and 5xx
-- Expand and reorganise the test suite — one file per tested unit; 115 tests pass with no failures
+- Configure structured logging via `src/logging_config.py` — JSON output with INFO/DEBUG threshold; per-page, retry, and date-drop events emitted at appropriate levels
+- Expand and reorganise the test suite — one file per tested unit; 115 tests pass at delivery
 
 ---
 
@@ -132,6 +139,38 @@ async def fetch_page(url: str, css_selector: str | None = None) -> PageResult
 
 ---
 
+## Module: `src/logging_config.py`
+
+### Design Decisions
+
+- **structlog over stdlib logging** — structlog's processor chain produces machine-readable JSON; every log event is a dict with consistent fields regardless of which module emits it
+- **`configure_logging(verbose)` as the single call site** — `main.py` calls it once at startup; all subsequent `structlog.get_logger(__name__)` calls inherit the configured pipeline without further setup
+- **INFO for normal flow, WARNING for anomalies** — page collected, date filter active, and schema inferred are INFO; fetch retries, extraction errors, and dropped pages are WARNING; DEBUG is reserved for tool-level detail like individual Claude tool calls
+
+### Public Interface
+
+```python
+def configure_logging(verbose: bool = False) -> None
+```
+
+- Sets stdlib root logger to `DEBUG` when `verbose=True`, `INFO` otherwise
+- Configures structlog with: `add_log_level`, `add_logger_name`, `TimeStamper(fmt="iso")`, `StackInfoRenderer`, `ExceptionRenderer`, `JSONRenderer`
+- All log output is newline-delimited JSON on stderr
+
+### Log Events Introduced in Week 5
+
+| Event key | Level | Emitted by | Fields |
+|---|---|---|---|
+| `fetching` | INFO | `src/agent.py` | `depth`, `url` |
+| `page collected` | INFO | `src/agent.py` | `index`, `depth`, `chars`, `links`, `url` |
+| `page dropped: outside date range` | INFO | `src/agent.py` | `url`, `page_date` |
+| `date filter active` | INFO | `src/agent.py` | `filter`, `from_date`, `to_date`, `include_undated` |
+| `fetch failed` | WARNING | `src/agent.py` | `url`, `error` |
+| `retry` | WARNING | `src/crawler.py` | `attempt`, `url`, `reason` |
+| `429 rate limited` | WARNING | `src/crawler.py` | `url`, `retry_after` |
+
+---
+
 ## Module: `src/agent.py` Updates
 
 ### Design Decisions
@@ -196,7 +235,7 @@ if date_range is not None and _is_article_page(page):
 | `test_agent_helpers.py` | 14 | `_parse_min_articles`, `_is_article_page`, `_canonical`, `_same_domain`, `_allowed` |
 | `test_agent_run_agent.py` | 15 | `run_agent` — schema inference, date filter, token budget, page budget, auto-extract |
 | `test_crawler_fetch_page.py` | 9 | `fetch_page` — success path, 500 retry, 429 backoff, exception retry |
-| `test_date_filter.py` | 36 | `parse_date_filter` (19 valid patterns + 4 invalid), `detect_page_date` (4 sources), `is_in_range` |
+| `test_date_filter.py` | 36 | `parse_date_filter` (19 valid patterns + 4 invalid), `detect_page_date` (4 sources), `is_in_range` (expanded to 54 in later revisions) |
 | `test_extractor_extract.py` | 12 | `extract` — empty page, schema fallback, JSON errors, validation errors |
 | `test_extractor_infer_schema.py` | 5 | `infer_schema` — schema structure, fence stripping, nullable properties |
 | `test_main_build_parser.py` | 5 | `build_parser` — output flags, crawl flags, extract flags, date flags |
@@ -272,6 +311,6 @@ No new project dependencies were added in Week 5 — the initial date filter use
 - [x] `--date-filter` and `--include-undated` flags wired end-to-end
 - [x] Retry policy in `fetch_page` — exponential backoff, 429 handling, max 3 retries
 - [x] 115 tests pass — `uv run pytest` exits 0
-- [ ] End-to-end evaluation run — crawl CafeF with date filter and extract, compare output to ground truth
-- [ ] Token usage optimisation — profile which pages consume the most tokens; consider summarising long pages before sending to Claude
-- [ ] `--css-selector` flag exposed in CLI — currently accepted by `fetch_page` but not wired to argparse
+- [x] `--css-selector` flag exposed in CLI — wired end-to-end in Week 6
+- [x] Token usage optimisation — `--max-chars` added in Week 6 to cap per-turn markdown sent to Claude
+- [ ] End-to-end evaluation run — crawl CafeF with date filter and extract, compare output to ground truth (integration tests written in Week 6; ground-truth comparison deferred)
