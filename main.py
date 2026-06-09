@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-budget", type=int, default=500_000, help="Total token budget (default: 500000)")
     parser.add_argument("--date-filter", default="", help="Natural-language date filter, e.g. 'last 7 days'")
     parser.add_argument("--include-undated", action="store_true", help="Include pages with no detectable date")
+    parser.add_argument("--css-selector", default="", help="CSS selector to restrict page content extraction")
+    parser.add_argument("--max-chars", type=int, default=0, help="Truncate page markdown to this many chars before sending to Claude (0 = no limit)")
     parser.add_argument("--same-domain", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-pattern", action="append", default=[], metavar="PATTERN")
     parser.add_argument("--exclude-pattern", action="append", default=[], metavar="PATTERN")
@@ -73,6 +75,8 @@ async def run(args: argparse.Namespace) -> None:
         extract_schema=extract_schema,
         date_filter=args.date_filter,
         include_undated=args.include_undated,
+        css_selector=args.css_selector,
+        max_chars=args.max_chars,
     )
 
     logger.info(

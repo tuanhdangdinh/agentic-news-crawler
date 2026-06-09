@@ -109,6 +109,8 @@ class AgentConfig(BaseModel):
     extract_schema: dict | None = None
     date_filter: str = ""
     include_undated: bool = True
+    css_selector: str = ""
+    max_chars: int = 0
 
 
 class CrawlState(BaseModel):
@@ -326,13 +328,18 @@ async def _agent_turn(
     min_articles: int = 0,
 ) -> None:
     """Run the observe-decide-act cycle for one page."""
+    markdown = page.markdown
+    if config.max_chars > 0 and len(markdown) > config.max_chars:
+        markdown = markdown[: config.max_chars]
+        logger.debug("markdown truncated", chars=config.max_chars, original=len(page.markdown), url=page.final_url)
+
     user_content = render(
         "user_turn.j2",
         url=page.final_url,
         title=page.title,
         depth=depth,
         max_depth=config.max_depth,
-        markdown=page.markdown,
+        markdown=markdown,
         links_internal=page.links_internal,
         article_candidate_links=_article_candidate_links(page.links_internal),
         pages_count=len(state.pages),
@@ -473,7 +480,7 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
 
         # OBSERVE — fetch the page
         logger.info("fetching", depth=depth, url=url)
-        page = await fetch_page(url)
+        page = await fetch_page(url, css_selector=config.css_selector or None)
         state.visited.add(url)
 
         if not page.success:

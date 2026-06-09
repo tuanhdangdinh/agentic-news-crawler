@@ -137,21 +137,32 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
     if relative is not None:
         return relative
 
-    # "since <date>" — open upper bound treated as today (e.g. "since June 1st")
-    m = re.match(r"since\s+(.+)$", text)
+    # "since <date>" — may be embedded ("articles published since June 1st about banks")
+    m = re.search(r"\bsince\s+(.+)", text)
     if m:
-        try:
-            return (_parse_one_date(m.group(1), today), today)
-        except ValueError:
-            raise ValueError(f"cannot parse date filter: {prompt!r}") from None
+        rest = m.group(1).split()
+        for n in range(len(rest), 0, -1):
+            try:
+                return (_parse_one_date(" ".join(rest[:n]), today), today)
+            except ValueError:
+                continue
+        raise ValueError(f"cannot parse date filter: {prompt!r}")
 
-    # "between <date> and <date>"
-    m = re.match(r"between\s+(.+?)\s+and\s+(.+)$", text)
+    # "between <date> and <date>" — may be embedded
+    m = re.search(r"\bbetween\s+(.+?)\s+and\s+(.+)", text)
     if m:
+        left = m.group(1).strip()
+        right_words = m.group(2).split()
         try:
-            return (_parse_one_date(m.group(1), today), _parse_one_date(m.group(2), today))
+            from_date = _parse_one_date(left, today)
         except ValueError:
             raise ValueError(f"cannot parse date filter: {prompt!r}") from None
+        for n in range(len(right_words), 0, -1):
+            try:
+                return (from_date, _parse_one_date(" ".join(right_words[:n]), today))
+            except ValueError:
+                continue
+        raise ValueError(f"cannot parse date filter: {prompt!r}")
 
     # Bare single date — "2026-06-04", "June 1st", "1 thang 6"
     try:

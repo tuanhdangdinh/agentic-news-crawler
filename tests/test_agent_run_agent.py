@@ -347,3 +347,44 @@ async def test_run_agent_auto_extracts_from_article_pages():
         state = await run_agent(article.url, config)
     mock_extract.assert_called_once()
     assert state.pages[0].metadata.get("extracted") == extracted
+
+
+@pytest.mark.asyncio
+async def test_run_agent_max_chars_truncates_markdown_sent_to_claude():
+    """max_chars > 0 must limit the markdown sent to Claude, not the stored page."""
+    long_page = _page()
+    long_page.markdown = "x" * 20_000
+    config = AgentConfig(max_pages=1, max_chars=500)
+
+    captured_calls: list[dict] = []
+
+    async def fake_create(**kwargs):
+        captured_calls.append(kwargs)
+        return _finish_response()
+
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=long_page)),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = fake_create
+        state = await run_agent("https://cafef.vn", config)
+
+    assert len(state.pages[0].markdown) == 20_000, "stored markdown must not be truncated"
+    user_msg = captured_calls[0]["messages"][0]["content"]
+    assert "x" * 501 not in user_msg, "Claude should not receive more than max_chars"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_passes_css_selector_to_fetch_page():
+    config = AgentConfig(max_pages=1, css_selector="article.main")
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=_page())) as mock_fetch,
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_finish_response())
+        await run_agent("https://cafef.vn", config)
+    mock_fetch.assert_called_once_with("https://cafef.vn", css_selector="article.main")

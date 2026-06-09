@@ -85,6 +85,25 @@ def test_parse_date_filter_finds_relative_phrase_in_compound_text(
     assert to_date == expected_to
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected_from", "expected_to"),
+    [
+        # "since" embedded in a sentence
+        ("articles published since 2026-06-01 about banks", date(2026, 6, 1), date(2026, 6, 4)),
+        ("news since June 1 2026 on the stock market", date(2026, 6, 1), date(2026, 6, 4)),
+        # "between … and …" embedded in a sentence
+        ("show articles between 2026-05-01 and 2026-06-01 on economy", date(2026, 5, 1), date(2026, 6, 1)),
+        ("content between May 1 2026 and June 1 2026 about banks", date(2026, 5, 1), date(2026, 6, 1)),
+    ],
+)
+def test_parse_date_filter_finds_absolute_phrase_in_compound_text(
+    prompt: str, expected_from: date, expected_to: date
+):
+    from_date, to_date = parse_date_filter(prompt, today=_TODAY)
+    assert from_date == expected_from
+    assert to_date == expected_to
+
+
 def test_detect_page_date_from_article_published_time():
     page = _page(metadata={"article:published_time": "2026-06-03T09:16:00+07:00"})
     assert detect_page_date(page) == date(2026, 6, 3)
