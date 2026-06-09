@@ -13,24 +13,28 @@ crawl-tool/
 ├── main.py                  # CLI entry point
 ├── pyproject.toml           # Dependencies and Ruff config
 ├── prompts/                 # Jinja2 prompt templates
+│   ├── system.j2
+│   ├── user_turn.j2
+│   ├── extract.j2
+│   └── infer_schema.j2
 ├── src/
+│   ├── models/page.py       # PageResult — shared domain type
 │   ├── agent.py             # LLM agent loop — observe, decide, act
-│   ├── crawler.py           # Crawl4AI wrapper — fetch_page, PageResult
+│   ├── crawler.py           # Crawl4AI wrapper — fetch_page with retry
 │   ├── extractor.py         # Structured extraction via Claude
 │   ├── date_filter.py       # NL date parsing and page date detection
+│   ├── logging_config.py    # structlog configuration
 │   ├── prompts.py           # Jinja2 template loader
 │   └── output.py            # JSON / JSONL serialization
 ├── tests/
+│   ├── test_integration.py  # End-to-end tests (run with: pytest -m integration)
+│   └── ...                  # Unit tests (run with: pytest)
 └── docs/
+    ├── architecture.md      # Module diagram, data flow, design decisions
     ├── crawl-tool-intern-plan.md
     ├── implementation_spec.md
     ├── standards/
-    │   ├── coding_style.md
-    │   └── doc_style.md
     └── reports/
-        ├── week1_research_report.md
-        ├── week2_implementation_report.md
-        └── week3_implementation_report.md
 ```
 
 ---
@@ -131,8 +135,10 @@ uv run python main.py <url> [options]
 | `--max-depth` | `1` | Maximum crawl depth (seed = depth 0) |
 | `--max-pages` | `100` | Maximum pages to fetch |
 | `--token-budget` | `500000` | Total Claude token cap across the crawl |
-| `--date-filter` | `""` | Natural-language date range, e.g. `"last 7 days"` |
+| `--date-filter` | `""` | Natural-language date range, e.g. `"last 7 days"` or `"articles since June 1st"` |
 | `--include-undated` | off | Include pages with no detectable publish date |
+| `--css-selector` | `""` | CSS selector to scope content extraction, e.g. `"article.main-content"` |
+| `--max-chars` | `0` | Truncate page markdown to this many chars before sending to Claude; 0 = no limit |
 | `--same-domain` | on | Restrict crawl to the seed domain |
 | `--no-same-domain` | — | Allow following off-domain links |
 | `--include-pattern` | `[]` | Glob pattern URLs must match (repeatable) |

@@ -36,3 +36,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests that hit real sites and the Claude API (deselect with '-m not integration')",
+    "slow: tests that take more than a few seconds",
+]
