@@ -261,6 +261,29 @@ def detect_page_date(page: PageResult) -> date | None:
     return detect_url_date(page.final_url)
 
 
+# Plausible date window for Vietnamese online news — sites launched mid-2000s;
+# allow up to 2 years in the future for scheduled or pre-published articles.
+_NEWS_DATE_MIN = date(1995, 1, 1)
+_NEWS_DATE_MAX_OFFSET_DAYS = 730
+
+
+def _resolve_2digit_year(yy: int, mm: int, dd: int) -> date | None:
+    """Resolve a 2-digit year to a full date within the plausible news window.
+
+    Tries the 2000s century first, then the 1900s.  Returns ``None`` when
+    neither candidate falls inside ``[1995-01-01, today + 2 years]``.
+    """
+    cutoff = date.today() + timedelta(days=_NEWS_DATE_MAX_OFFSET_DAYS)
+    for century in (2000, 1900):
+        try:
+            candidate = date(century + yy, mm, dd)
+        except ValueError:
+            continue
+        if _NEWS_DATE_MIN <= candidate <= cutoff:
+            return candidate
+    return None
+
+
 def detect_url_date(url: str) -> date | None:
     """Extract a publish date embedded in a Vietnamese news article URL.
 
@@ -277,10 +300,9 @@ def detect_url_date(url: str) -> date | None:
     # CafeF: 1NN prefix then 2-digit year, month, day
     m = re.search(r"-1\d{2}(\d{2})(\d{2})(\d{2})\d+\.chn$", url)
     if m:
-        try:
-            return date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            pass
+        resolved = _resolve_2digit_year(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if resolved is not None:
+            return resolved
 
     # TuoiTre / generic: 4-digit year, month, day before a long id and .htm(l)
     m = re.search(r"-(\d{4})(\d{2})(\d{2})\d{6,}\.html?$", url)

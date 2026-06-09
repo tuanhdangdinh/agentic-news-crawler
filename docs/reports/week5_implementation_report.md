@@ -5,6 +5,7 @@
 **Revision history:**
 - Initial draft: date filter module, retry policy in crawler, agent loop integration, CLI flags, test suite expansion
 - Rev 2 (2026-06-08): `parse_date_filter` extended with a `dateparser` fallback — natural-language date tokens (`"since June 1st"`, `"1 June 2026"`) are now accepted alongside ISO `YYYY-MM-DD`; date-filter tests expanded
+- Rev 3 (2026-06-09): Vietnamese URL century assumption resolved — `_resolve_2digit_year` prefers 2000s, falls back to 1900s, returns `None` when neither fits the plausible news window; 4 new tests added
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/6adf41d3eda0315810dba0fc11da56d534c160a9)
 
@@ -249,10 +250,10 @@ uv run python main.py https://cafef.vn \
 
 ## Known Limitations
 
-- **NL parser handles standalone phrases only** — single-date tokens are parsed ISO-first then via a `dateparser` fallback (Rev 2), so `"since June 1st"` / `"1 June 2026"` now work; what remains unparsed is compound expressions like `"articles from last week about banks"` where the date is embedded in a sentence — the filter must still be a standalone phrase
-- **Vietnamese URL pattern assumes 2000s dates** — the regex extracts `YY` and prepends `20`; URLs with dates in other centuries would be misclassified; acceptable for the current target site
-- **Date filter not applied to the seed page** — the seed URL is always fetched regardless of date; only article-classified pages are filtered; by design, since the seed is needed for navigation
-- **No schema for `detect_page_date` sources beyond metadata and headers** — JSON-LD blocks embedded in `<script>` tags are read from `page.metadata` only if Crawl4AI already parsed them; pages where JSON-LD is not surfaced in metadata go to URL-pattern detection; a proper JSON-LD parser is deferred
+- **NL parser handles standalone phrases only** — resolved in Week 6: compound relative phrases (`"articles from last week about banks"`) and embedded absolute phrases (`"articles since June 1st about banks"`) now extract correctly via unanchored regex search and word-by-word trimming
+- **Vietnamese URL pattern assumes 2000s dates** — resolved in Rev 3: `_resolve_2digit_year` tries `2000 + YY` first; if the result exceeds `today + 2 years`, falls back to `1900 + YY`; returns `None` when neither candidate falls inside the plausible news window `[1995-01-01, today + 2 years]`
+- **Date filter not applied to the seed page** — by design; the seed is always fetched for navigation regardless of date range
+- **No schema for `detect_page_date` sources beyond metadata and headers** — resolved in Week 6: `_extract_json_ld_date` parses `<script type="application/ld+json">` blocks directly from `page.html`, including `@graph` members
 
 ---
 

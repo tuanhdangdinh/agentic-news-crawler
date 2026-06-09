@@ -209,3 +209,37 @@ def test_is_in_range_excludes_undated_page_by_default():
 
 def test_is_in_range_includes_undated_page_when_flag_set():
     assert is_in_range(None, date(2026, 6, 1), date(2026, 6, 4), include_undated=True)
+
+
+# ---------------------------------------------------------------------------
+# detect_url_date — 2-digit year century resolution
+# ---------------------------------------------------------------------------
+
+def test_detect_url_date_cafef_current_year_resolves_to_2000s():
+    from src.date_filter import detect_url_date
+    # YY=26 → 2026, which is within the plausible window
+    assert detect_url_date("https://cafef.vn/bai-viet-188260603074758376.chn") == date(2026, 6, 3)
+
+
+def test_detect_url_date_cafef_far_future_yy_falls_back_to_1900s():
+    from datetime import date as _date
+
+    from src.date_filter import detect_url_date
+    # YY that puts 2000+YY well past today+2years must fall back to 1900s
+    # Use YY=98 → 2098 (implausible) → falls back to 1998
+    result = detect_url_date("https://cafef.vn/bai-viet-188980603074758376.chn")
+    assert result == _date(1998, 6, 3)
+
+
+def test_detect_url_date_cafef_implausible_both_centuries_returns_none():
+    from src.date_filter import detect_url_date
+    # YY=50 → 2050 (too far future) → 1950 (before 1995 min) → None
+    result = detect_url_date("https://cafef.vn/bai-viet-188500603074758376.chn")
+    assert result is None
+
+
+def test_detect_url_date_cafef_invalid_month_returns_none():
+    from src.date_filter import detect_url_date
+    # month=13 is always invalid regardless of century
+    result = detect_url_date("https://cafef.vn/bai-viet-188261303074758376.chn")
+    assert result is None
