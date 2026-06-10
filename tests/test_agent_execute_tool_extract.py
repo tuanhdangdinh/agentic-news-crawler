@@ -70,9 +70,37 @@ async def test_extract_infers_schema_once_when_config_schema_missing():
             current_page=page,
         )
     assert result == "{'title': 'CafeF'}"
-    mock_infer.assert_called_once_with("extract title")
-    mock_extract.assert_called_once_with(page, "extract title", schema)
+    mock_infer.assert_called_once_with("extract title", client=None)
+    mock_extract.assert_called_once_with(page, "extract title", schema, client=None)
     assert config.extract_schema == schema
+
+
+@pytest.mark.asyncio
+async def test_extract_uses_registered_schema_before_inference():
+    page = _page()
+    config = AgentConfig()
+    prompt = "extract stock tickers and key financial figures"
+    with (
+        patch("src.agent.infer_schema", AsyncMock()) as mock_infer,
+        patch(
+            "src.agent.extractor_extract",
+            AsyncMock(return_value={"key_financial_figures": []}),
+        ) as mock_extract,
+    ):
+        result = await _execute_tool(
+            "extract",
+            {"prompt": prompt},
+            CrawlState(),
+            config,
+            "https://cafef.vn",
+            0,
+            current_page=page,
+        )
+
+    assert result == "{'key_financial_figures': []}"
+    mock_infer.assert_not_called()
+    assert config.extract_schema is not None
+    mock_extract.assert_called_once_with(page, prompt, config.extract_schema, client=None)
 
 
 @pytest.mark.asyncio

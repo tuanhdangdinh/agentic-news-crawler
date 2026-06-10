@@ -83,8 +83,10 @@ def _add_url_response(url: str) -> MagicMock:
 @pytest.mark.asyncio
 async def test_run_agent_infers_schema_once_before_loop():
     config = AgentConfig(
-        goal="collect news", max_pages=1,
-        extract_prompt="extract title", extract_schema=None,
+        goal="collect news",
+        max_pages=1,
+        extract_prompt="extract title",
+        extract_schema=None,
     )
     with (
         patch("src.agent.fetch_page", AsyncMock(return_value=_page())),
@@ -100,10 +102,34 @@ async def test_run_agent_infers_schema_once_before_loop():
 
 
 @pytest.mark.asyncio
+async def test_run_agent_uses_registered_schema_before_inference():
+    config = AgentConfig(
+        goal="collect news",
+        max_pages=1,
+        extract_prompt="extract stock tickers and key financial figures",
+    )
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=_page())),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+        patch("src.agent.infer_schema", AsyncMock()) as mock_infer,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_finish_response())
+        await run_agent("https://cafef.vn", config)
+
+    mock_infer.assert_not_called()
+    assert config.extract_schema is not None
+    assert config.extract_schema["properties"]["key_financial_figures"]["items"]["type"] == "object"
+
+
+@pytest.mark.asyncio
 async def test_run_agent_skips_infer_schema_when_schema_provided():
     config = AgentConfig(
-        goal="collect news", max_pages=1,
-        extract_prompt="extract title", extract_schema=_INFERRED_SCHEMA,
+        goal="collect news",
+        max_pages=1,
+        extract_prompt="extract key financial figures",
+        extract_schema=_INFERRED_SCHEMA,
     )
     with (
         patch("src.agent.fetch_page", AsyncMock(return_value=_page())),
@@ -115,6 +141,7 @@ async def test_run_agent_skips_infer_schema_when_schema_provided():
         mock_client.messages.create = AsyncMock(return_value=_finish_response())
         await run_agent("https://cafef.vn", config)
     mock_infer.assert_not_called()
+    assert config.extract_schema == _INFERRED_SCHEMA
 
 
 @pytest.mark.asyncio

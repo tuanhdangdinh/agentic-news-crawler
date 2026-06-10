@@ -17,6 +17,7 @@ from src.extractor import extract as extractor_extract
 from src.extractor import infer_schema
 from src.models import PageResult
 from src.prompts import render
+from src.schema_registry import match_registered_schema
 
 logger = structlog.get_logger(__name__)
 
@@ -82,7 +83,10 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "prompt": {"type": "string", "description": "What fields to extract"},
-                "schema": {"type": "object", "description": "Optional JSON Schema to validate output"},
+                "schema": {
+                    "type": "object",
+                    "description": "Optional JSON Schema to validate output",
+                },
             },
             "required": ["prompt"],
         },
@@ -93,6 +97,7 @@ TOOLS: list[dict] = [
 # ---------------------------------------------------------------------------
 # Config and state
 # ---------------------------------------------------------------------------
+
 
 class AgentConfig(BaseModel):
     """User-supplied parameters for a crawl run."""
@@ -143,6 +148,7 @@ class CrawlState(BaseModel):
 # ---------------------------------------------------------------------------
 # Guardrails
 # ---------------------------------------------------------------------------
+
 
 def _canonical(url: str) -> str:
     """Strip fragment for dedup purposes."""
@@ -221,6 +227,7 @@ def _article_candidate_links(links: list[str]) -> list[str]:
 # Tool execution
 # ---------------------------------------------------------------------------
 
+
 async def _execute_tool(
     name: str,
     inputs: dict,
@@ -230,6 +237,7 @@ async def _execute_tool(
     current_depth: int,
     current_page: PageResult | None = None,
     min_articles: int = 0,
+    client: anthropic.AsyncAnthropic | None = None,
 ) -> str:
     """Execute a tool call from the agent and return a result string."""
     logger.debug("tool call", name=name, inputs=inputs)
@@ -241,7 +249,12 @@ async def _execute_tool(
         url = _canonical(inputs["url"])
         next_depth = current_depth + 1
         if next_depth > config.max_depth:
-            logger.debug("guardrail: depth exceeded", next_depth=next_depth, max_depth=config.max_depth, url=url)
+            logger.debug(
+                "guardrail: depth exceeded",
+                next_depth=next_depth,
+                max_depth=config.max_depth,
+                url=url,
+            )
             return f"skipped (depth {next_depth} > max {config.max_depth})"
         if url in state.visited:
             logger.debug("guardrail: already visited", url=url)
@@ -298,10 +311,15 @@ async def _execute_tool(
         prompt = inputs.get("prompt", config.extract_prompt)
         schema = inputs.get("schema") or config.extract_schema
         if schema is None:
-            logger.info("inferring extraction schema from tool prompt")
-            schema = await infer_schema(prompt)
+            registered = match_registered_schema(prompt)
+            if registered is not None:
+                schema_name, schema = registered
+                logger.info("registered extraction schema selected", schema=schema_name)
+            else:
+                logger.info("inferring extraction schema from tool prompt")
+                schema = await infer_schema(prompt, client=client)
             config.extract_schema = schema
-        result = await extractor_extract(current_page, prompt, schema)
+        result = await extractor_extract(current_page, prompt, schema, client=client)
         if "error" in result:
             logger.warning("extraction error", url=current_page.url, error=result["error"])
             current_page.metadata["extraction_error"] = result["error"]
@@ -317,6 +335,7 @@ async def _execute_tool(
 # Per-page agent turn
 # ---------------------------------------------------------------------------
 
+
 async def _agent_turn(
     client: anthropic.AsyncAnthropic,
     system_prompt: str,
@@ -331,7 +350,12 @@ async def _agent_turn(
     markdown = page.markdown
     if config.max_chars > 0 and len(markdown) > config.max_chars:
         markdown = markdown[: config.max_chars]
-        logger.debug("markdown truncated", chars=config.max_chars, original=len(page.markdown), url=page.final_url)
+        logger.debug(
+            "markdown truncated",
+            chars=config.max_chars,
+            original=len(page.markdown),
+            url=page.final_url,
+        )
 
     user_content = render(
         "user_turn.j2",
@@ -393,14 +417,17 @@ async def _agent_turn(
                     depth,
                     page,
                     min_articles,
+                    client=client,
                 )
                 if result.startswith("finish rejected:"):
                     finish_rejected = True
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    }
+                )
 
         if response.stop_reason == "end_turn" or not tool_results:
             break
@@ -420,6 +447,7 @@ async def _agent_turn(
 # ---------------------------------------------------------------------------
 # Main agent loop
 # ---------------------------------------------------------------------------
+
 
 async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
     """Run the full agent crawl loop.
@@ -448,9 +476,17 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
         )
 
     if config.extract_prompt and config.extract_schema is None:
-        logger.info("inferring extraction schema from prompt")
-        config.extract_schema = await infer_schema(config.extract_prompt)
-        logger.info("inferred schema", properties=len(config.extract_schema.get("properties", {})))
+        registered = match_registered_schema(config.extract_prompt)
+        if registered is not None:
+            schema_name, config.extract_schema = registered
+            logger.info("registered extraction schema selected", schema=schema_name)
+        else:
+            logger.info("inferring extraction schema from prompt")
+            config.extract_schema = await infer_schema(config.extract_prompt, client=client)
+            logger.info(
+                "inferred schema",
+                properties=len(config.extract_schema.get("properties", {})),
+            )
 
     system_prompt = render(
         "system.j2",

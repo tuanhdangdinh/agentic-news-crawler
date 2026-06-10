@@ -17,6 +17,8 @@ logger = structlog.get_logger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 
+_schema_cache: dict[str, dict] = {}
+
 
 def _strip_fences(text: str) -> str:
     """Strip markdown code fences Claude sometimes adds despite instructions."""
@@ -45,16 +47,21 @@ def _validate(data: dict, schema: dict) -> tuple[bool, str]:
         return False, exc.message
 
 
-async def infer_schema(prompt: str) -> dict:
+async def infer_schema(prompt: str, client: anthropic.AsyncAnthropic | None = None) -> dict:
     """Convert a natural-language extraction request into a JSON Schema.
 
     Args:
         prompt: Natural-language description of fields to extract.
+        client: Shared Anthropic client; a new one is created if not provided.
 
     Returns:
         A JSON Schema dict with type "object" and a properties block.
     """
-    client = anthropic.AsyncAnthropic()
+    if prompt in _schema_cache:
+        logger.debug("infer_schema cache hit", prompt_chars=len(prompt))
+        return _schema_cache[prompt]
+
+    client = client or anthropic.AsyncAnthropic()
     user_content = render("infer_schema.j2", prompt=prompt)
 
     response = await client.messages.create(
@@ -70,18 +77,27 @@ async def infer_schema(prompt: str) -> dict:
     logger.debug("infer_schema response", chars=len(raw))
     try:
         schema = json.loads(raw)
-        _make_nullable(schema)
-        logger.debug("infer_schema done", properties=len(schema.get("properties", {})))
-        return schema
     except json.JSONDecodeError as exc:
         logger.warning("infer_schema JSON parse error", exc=str(exc))
         return {"type": "object", "properties": {}}
+
+    try:
+        jsonschema.Draft7Validator.check_schema(schema)
+    except jsonschema.SchemaError as exc:
+        logger.warning("infer_schema invalid schema", exc=str(exc))
+        return {"type": "object", "properties": {}}
+
+    _make_nullable(schema)
+    logger.debug("infer_schema done", properties=len(schema.get("properties", {})))
+    _schema_cache[prompt] = schema
+    return schema
 
 
 async def extract(
     page: PageResult,
     prompt: str,
     schema: dict | None = None,
+    client: anthropic.AsyncAnthropic | None = None,
 ) -> dict:
     """Extract structured data from a fetched page.
 
@@ -90,6 +106,7 @@ async def extract(
         prompt: Natural-language instruction describing which fields to extract.
         schema: JSON Schema to validate output against. When None, infer_schema
             is called first to derive one from the prompt.
+        client: Shared Anthropic client; a new one is created if not provided.
 
     Returns:
         Validated extraction result on success.
@@ -99,12 +116,13 @@ async def extract(
     if not page.markdown:
         return {"error": "page has no markdown content", "raw": ""}
 
+    client = client or anthropic.AsyncAnthropic()
+
     if schema is None:
         logger.debug("extract: inferring schema")
-        schema = await infer_schema(prompt)
+        schema = await infer_schema(prompt, client=client)
 
     logger.debug("extract start", url=page.url, prompt=prompt[:60], schema_props=len(schema.get("properties", {})))
-    client = anthropic.AsyncAnthropic()
 
     # Prepend the title and detected publish date so they're available even when
     # article-body scoping (target_elements) has limited the markdown to the body,

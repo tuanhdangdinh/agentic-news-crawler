@@ -9,6 +9,8 @@ Generate a JSON Schema for the structured data described in the extraction promp
 - Include a `"properties"` object with one key per field mentioned in the prompt
 - Use snake_case for all property names (e.g., `publish_date`, not `publishDate`)
 - Set appropriate types: `"string"`, `"number"`, `"array"`, `"boolean"`
+- Every property MUST have a `"description"` string explaining what to extract and any format constraints (e.g., ISO 8601 for dates, currency symbol for prices)
+- Every `"array"` property MUST include an `"items"` object with at least a `"type"` field; if items are objects, include their `"properties"` and `"description"` fields too
 - Add fields to `"required"` only when they are explicitly required by the prompt
 - Keep the schema minimal — do not add fields not mentioned in the prompt
 
