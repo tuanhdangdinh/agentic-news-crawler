@@ -11,13 +11,21 @@ same-domain filter, date filter, and extraction accuracy.
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
+from unittest.mock import patch
+from urllib.parse import urlparse
 
 import pytest
 
 from src.agent import AgentConfig, run_agent
 from src.crawler import fetch_page
 from src.date_filter import detect_page_date, is_in_range
+
+requires_anthropic_key = pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY is required for agent integration tests",
+)
 
 # ---------------------------------------------------------------------------
 # Site smoke tests — crawl completes, pages returned, no crashes
@@ -26,6 +34,7 @@ from src.date_filter import detect_page_date, is_in_range
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_cafef_crawl_returns_pages():
     """Crawl CafeF seed page; agent collects at least one page without crashing."""
     config = AgentConfig(goal="collect economy news articles", max_depth=1, max_pages=3)
@@ -37,6 +46,7 @@ async def test_cafef_crawl_returns_pages():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_vneconomy_crawl_returns_pages():
     """Crawl VnEconomy seed page; agent collects at least one page without crashing."""
     config = AgentConfig(goal="collect economy news articles", max_depth=1, max_pages=3)
@@ -47,6 +57,7 @@ async def test_vneconomy_crawl_returns_pages():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_vietnamplus_crawl_returns_pages():
     """Crawl VietnamPlus economy section; agent collects at least one page."""
     config = AgentConfig(
@@ -54,7 +65,7 @@ async def test_vietnamplus_crawl_returns_pages():
         max_depth=1,
         max_pages=3,
     )
-    state = await run_agent("https://www.vietnamplus.vn/kinh-te.vnp", config)
+    state = await run_agent("https://www.vietnamplus.vn", config)
     assert len(state.pages) >= 1
     assert all(p.success for p in state.pages)
 
@@ -66,12 +77,17 @@ async def test_vietnamplus_crawl_returns_pages():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_max_depth_zero_fetches_seed_only():
-    """max_depth=0 must not add any depth-1 URLs to visited."""
+    """max_depth=0 fetches and visits only the seed URL."""
+    seed_url = "https://cafef.vn"
     config = AgentConfig(goal="collect news", max_depth=0, max_pages=5)
-    state = await run_agent("https://cafef.vn", config)
-    # With max_depth=0 the agent cannot add frontier URLs beyond depth 0
-    assert len(state.pages) <= 1
+    with patch("src.agent.fetch_page", wraps=fetch_page) as mock_fetch:
+        state = await run_agent(seed_url, config)
+    fetched_urls = [call.args[0] for call in mock_fetch.await_args_list]
+    assert fetched_urls == [seed_url]
+    assert state.visited == {seed_url}
+    assert len(state.pages) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -81,12 +97,14 @@ async def test_max_depth_zero_fetches_seed_only():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_no_duplicate_fetches():
-    """Every URL in state.visited must appear exactly once."""
+    """The agent never calls fetch_page twice for the same URL."""
     config = AgentConfig(goal="collect economy news", max_depth=1, max_pages=5)
-    state = await run_agent("https://cafef.vn", config)
-    visited_list = list(state.visited)
-    assert len(visited_list) == len(set(visited_list))
+    with patch("src.agent.fetch_page", wraps=fetch_page) as mock_fetch:
+        await run_agent("https://cafef.vn", config)
+    fetched_urls = [call.args[0] for call in mock_fetch.await_args_list]
+    assert len(fetched_urls) == len(set(fetched_urls))
 
 
 # ---------------------------------------------------------------------------
@@ -96,16 +114,14 @@ async def test_no_duplicate_fetches():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_same_domain_filter_keeps_crawl_on_seed_domain():
     """With same_domain=True (default), all visited URLs share the seed domain."""
-    from urllib.parse import urlparse
-
     config = AgentConfig(goal="collect economy news", max_depth=1, max_pages=5, same_domain=True)
     state = await run_agent("https://cafef.vn", config)
     seed_domain = "cafef.vn"
     for url in state.visited:
-        parsed = urlparse(url)
-        assert seed_domain in parsed.netloc, f"off-domain URL found: {url}"
+        assert _normalized_host(url) == seed_domain, f"off-domain URL found: {url}"
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +131,11 @@ async def test_same_domain_filter_keeps_crawl_on_seed_domain():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_date_filter_excludes_articles_outside_range():
     """Pages with a detectable date outside the filter range must not appear in state.pages."""
     today = date.today()
-    from_date = today - timedelta(days=7)
+    from_date = today - timedelta(days=6)
     config = AgentConfig(
         goal="collect recent banking and stock market articles",
         date_filter="last 7 days",
@@ -127,12 +144,24 @@ async def test_date_filter_excludes_articles_outside_range():
         max_pages=5,
     )
     state = await run_agent("https://cafef.vn", config)
+    article_urls = set(state.article_pages)
+    dated_articles = []
     for page in state.pages:
+        if page.final_url not in article_urls:
+            continue
         page_date = detect_page_date(page)
         if page_date is not None:
-            assert is_in_range(page_date, from_date, today), (
-                f"page outside date range in results: {page.final_url} date={page_date}"
-            )
+            dated_articles.append((page, page_date))
+    assert dated_articles, "crawl must collect at least one article with a detectable date"
+    for page, page_date in dated_articles:
+        assert is_in_range(page_date, from_date, today), (
+            f"page outside date range in results: {page.final_url} date={page_date}"
+        )
+
+
+def _normalized_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    return host.removeprefix("www.")
 
 
 # ---------------------------------------------------------------------------
@@ -142,23 +171,30 @@ async def test_date_filter_excludes_articles_outside_range():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@requires_anthropic_key
 async def test_extraction_populates_required_fields():
     """extract_prompt produces structured output with expected keys on article pages."""
     config = AgentConfig(
         goal="collect banking news articles",
-        extract_prompt="extract the article title, publish date, and a one-sentence summary",
+        extract_prompt=(
+            "extract the article title, publish date, author, and a one-sentence summary"
+        ),
         max_depth=1,
         max_pages=3,
     )
     state = await run_agent("https://cafef.vn", config)
-    extracted_pages = [
-        p for p in state.pages if "extracted" in p.metadata
-    ]
+    extracted_pages = [p for p in state.pages if "extracted" in p.metadata]
     assert len(extracted_pages) >= 1, "at least one page must have extracted fields"
     for page in extracted_pages:
         result = page.metadata["extracted"]
         assert isinstance(result, dict), f"extracted must be a dict, got {type(result)}"
-        assert len(result) >= 1, f"extracted dict is empty for {page.final_url}"
+        required_fields = {"article_title", "publish_date", "author", "summary"}
+        assert required_fields <= result.keys(), (
+            f"missing extraction fields for {page.final_url}: "
+            f"{sorted(required_fields - result.keys())}"
+        )
+        assert isinstance(result["article_title"], str) and result["article_title"].strip()
+        assert isinstance(result["summary"], str) and result["summary"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +204,8 @@ async def test_extraction_populates_required_fields():
 
 @pytest.mark.integration
 @pytest.mark.slow
-async def test_fetch_cafef_returns_content():
-    page = await fetch_page("https://cafef.vn")
+async def test_fetch_vneconomy_returns_content():
+    page = await fetch_page("https://vneconomy.vn")
     assert page.success
     assert page.status_code == 200
     assert len(page.markdown) > 100
@@ -179,9 +215,9 @@ async def test_fetch_cafef_returns_content():
 
 @pytest.mark.integration
 @pytest.mark.slow
-async def test_fetch_cafef_article_returns_content():
-    """Fetch a known CafeF article URL and verify article body is extracted."""
-    url = "https://cafef.vn/thi-truong-chung-khoan.chn"
+async def test_fetch_vneconomy_section_returns_content():
+    """Fetch a known VnEconomy section URL and verify content is extracted."""
+    url = "https://vneconomy.vn/chung-khoan.htm"
     page = await fetch_page(url)
     assert page.success
     assert page.status_code == 200
