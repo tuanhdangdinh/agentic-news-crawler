@@ -1,6 +1,6 @@
 # crawl-tool
 
-An agent-driven CLI crawler that uses Claude to navigate Vietnamese economy and finance news sites and extract structured data for downstream analysis.
+An agent-driven crawler with CLI and Gradio interfaces that uses Claude to navigate Vietnamese economy and finance news sites and extract structured data for downstream analysis.
 
 Claude drives every crawl decision — which links to follow, what to extract, when to stop. Hard guardrails (depth, domain, robots.txt, token budget) are enforced in code and cannot be overridden by the agent.
 
@@ -10,6 +10,7 @@ Claude drives every crawl decision — which links to follow, what to extract, w
 
 ```
 crawl-tool/
+├── app.py                   # Gradio interface entry point
 ├── main.py                  # CLI entry point
 ├── pyproject.toml           # Dependencies and Ruff config
 ├── prompts/                 # Jinja2 prompt templates
@@ -22,9 +23,11 @@ crawl-tool/
 │   ├── agent.py             # LLM agent loop — observe, decide, act
 │   ├── crawler.py           # Crawl4AI wrapper — fetch_page with retry
 │   ├── extractor.py         # Structured extraction via Claude
+│   ├── schema_registry.py   # Deterministic schemas for known extraction intents
 │   ├── date_filter.py       # NL date parsing and page date detection
 │   ├── logging_config.py    # structlog configuration
 │   ├── prompts.py           # Jinja2 template loader
+│   ├── ui.py                # Gradio controls, validation, preview and downloads
 │   └── output.py            # JSON / JSONL serialization
 ├── tests/
 │   ├── test_integration.py  # End-to-end tests (run with: pytest -m integration)
@@ -43,6 +46,8 @@ crawl-tool/
 
 - Goal-directed crawling — describe what you want in plain language
 - Structured extraction — extract fields into JSON Schema via natural language prompt
+- Registered schemas for known financial extraction intents, with LLM inference fallback
+- CLI and browser-based Gradio workflows over the same crawl engine
 - Depth and page budget controls
 - Same-domain restriction and URL pattern filters
 - Date filtering — `"last 7 days"`, `"since 2026-01-01"`, etc.
@@ -110,6 +115,19 @@ uv run python main.py https://cafef.vn \
   --max-pages 10 \
   --output results.json
 ```
+
+Launch the browser interface:
+
+```bash
+uv run python app.py
+```
+
+The Gradio UI exposes crawl goals, extraction prompts, optional JSON Schema input,
+date and URL filters, crawl limits, JSON preview, and downloadable JSON or JSONL output.
+
+When no schema is supplied, the agent first checks the schema registry for a recognized
+intent. Unmatched prompts use Claude schema inference. A schema supplied through the CLI
+or UI always takes precedence.
 
 ---
 
