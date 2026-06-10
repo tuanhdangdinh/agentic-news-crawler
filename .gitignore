@@ -33,6 +33,8 @@ htmlcov/
 output/
 *.json
 *.jsonl
+integration_results.txt
+run.log
 !tests/fixtures/*.json
 
 # Playwright
