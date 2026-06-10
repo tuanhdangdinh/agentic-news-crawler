@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -270,6 +271,31 @@ async def test_run_agent_logs_fetch_at_info(caplog):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_logs_page_status_depth_and_fetch_time(caplog):
+    config = AgentConfig(max_pages=1)
+    page = _page()
+    page.fetch_time = 0.25
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=page)),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+        caplog.at_level(logging.INFO, logger="src.agent"),
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_finish_response())
+        await run_agent("https://cafef.vn", config)
+    payload = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if json.loads(record.message).get("event") == "page collected"
+    )
+    assert payload["url"] == "https://cafef.vn"
+    assert payload["status"] == 200
+    assert payload["depth"] == 0
+    assert payload["fetch_time"] == 0.25
+
+
+@pytest.mark.asyncio
 async def test_run_agent_logs_finish_reason_at_info(caplog):
     config = AgentConfig(max_pages=5)
     with (
@@ -302,6 +328,39 @@ async def test_run_agent_date_filter_drops_out_of_range_article():
 async def test_run_agent_date_filter_keeps_in_range_article():
     config = AgentConfig(date_filter="2026-06-03", include_undated=False)
     article = _article_page()  # has article:published_time = 2026-06-03
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=article)),
+        patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_end_turn_response())
+        state = await run_agent(article.url, config)
+    assert len(state.pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_date_filter_excludes_undated_article_by_default():
+    article = _article_page()
+    article.url = "https://example.com/very-long-undated-economy-article-slug.html"
+    article.final_url = article.url
+    article.metadata.clear()
+    config = AgentConfig(date_filter="2026-06-03", include_undated=False)
+    with (
+        patch("src.agent.fetch_page", AsyncMock(return_value=article)),
+        patch("src.agent.anthropic.AsyncAnthropic"),
+    ):
+        state = await run_agent(article.url, config)
+    assert state.pages == []
+
+
+@pytest.mark.asyncio
+async def test_run_agent_date_filter_includes_undated_article_when_enabled():
+    article = _article_page()
+    article.url = "https://example.com/very-long-undated-economy-article-slug.html"
+    article.final_url = article.url
+    article.metadata.clear()
+    config = AgentConfig(date_filter="2026-06-03", include_undated=True)
     with (
         patch("src.agent.fetch_page", AsyncMock(return_value=article)),
         patch("src.agent.anthropic.AsyncAnthropic") as mock_cls,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -53,13 +55,17 @@ def _crawl_result(
 # article_selector_for_url
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
         ("https://cafef.vn/bai-viet-123456789.chn", ".detail-content"),
         ("https://www.cafef.vn/bai-viet-123456789.chn", ".detail-content"),
         ("https://tuoitre.vn/tin-tuc-20260604161445695.htm", ".detail-content"),
-        ("https://vneconomy.vn/blue-chips-phuc-hoi-vn-index-quay-dau-tang-tu-nguong-ho-tro.htm", ".block-detail-page"),
+        (
+            "https://vneconomy.vn/blue-chips-phuc-hoi-vn-index-quay-dau-tang-tu-nguong-ho-tro.htm",
+            ".block-detail-page",
+        ),
         ("https://cafef.vn", None),
         ("https://cafef.vn/tai-chinh-ngan-hang.chn", None),
         ("https://tuoitre.vn/kinh-doanh.htm", None),
@@ -74,7 +80,10 @@ def test_article_selector_for_url(url: str, expected: str | None):
     ("url", "expected"),
     [
         ("https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html", True),
-        ("https://nhandan.vn/gia-vang-ngay-56-trong-nuoc-lao-doc-phien-thu-5-lien-tiep-rut-ngan-chenh-lech-so-gia-the-gioi-post967192.html", True),
+        (
+            "https://nhandan.vn/gia-vang-ngay-56-trong-nuoc-lao-doc-phien-thu-5-lien-tiep-rut-ngan-chenh-lech-so-gia-the-gioi-post967192.html",
+            True,
+        ),
         ("https://www.vietnamplus.vn/ngan-hang-the-gioi-kinh-te-viet-nam-post1114632.vnp", True),
         ("https://example.com/world/economy-growth-slows-in-asia-20260605000123.htm", True),
         ("https://example.com/very-long-economy-news-article-slug-with-many-words.html", True),
@@ -166,6 +175,7 @@ def test_extract_byline_author_rejects_missing_byline():
 # fetch_page — basic success
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fetch_page_returns_page_result_on_success():
     result = _crawl_result()
@@ -188,6 +198,7 @@ async def test_fetch_page_returns_page_result_on_success():
 # ---------------------------------------------------------------------------
 # fetch_page — selector auto-detection
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_fetch_page_uses_target_elements_for_known_article_url():
@@ -225,9 +236,7 @@ async def test_fetch_page_uses_generic_target_elements_for_unknown_article_url()
 
     crawler.arun = capture_arun
     with patch("src.crawler.AsyncWebCrawler", return_value=crawler):
-        await fetch_page(
-            "https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html"
-        )
+        await fetch_page("https://vietnamnews.vn/economy/1782728/global-rubber-prices-surge.html")
 
     assert "#abody" in captured_cfgs[0].target_elements
     assert ".detail .headline" in captured_cfgs[0].target_elements
@@ -300,6 +309,7 @@ async def test_fetch_page_explicit_css_selector_hard_scopes():
 # fetch_page — empty-scoped fallback
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fetch_page_falls_back_to_full_page_when_scoped_markdown_empty():
     """If scoped fetch succeeds but returns empty markdown, retry full-page."""
@@ -364,8 +374,9 @@ async def test_fetch_page_falls_back_to_full_page_when_scoped_markdown_too_short
 # fetch_page — retry on failure
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_fetch_page_retries_on_500_then_returns_failure():
+async def test_fetch_page_retries_three_times_on_500_then_returns_failure():
     result = _crawl_result(success=False)
     crawler = _crawler_context(result)
     mock_sleep = AsyncMock()
@@ -377,8 +388,8 @@ async def test_fetch_page_retries_on_500_then_returns_failure():
     assert page.success is False
     assert page.status_code == 500
     assert page.error == "server error"
-    assert crawler.arun.call_count == 3
-    assert mock_sleep.call_count == 2
+    assert crawler.arun.call_count == 4
+    assert [call.args[0] for call in mock_sleep.await_args_list] == [1, 2, 4]
 
 
 @pytest.mark.asyncio
@@ -395,7 +406,7 @@ async def test_fetch_page_treats_404_status_as_failure_even_when_crawl_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_retries_on_exception_then_returns_failure():
+async def test_fetch_page_retries_three_times_on_exception_then_returns_failure():
     crawler = MagicMock()
     crawler.__aenter__ = AsyncMock(return_value=crawler)
     crawler.__aexit__ = AsyncMock(return_value=None)
@@ -409,5 +420,36 @@ async def test_fetch_page_retries_on_exception_then_returns_failure():
     assert page.success is False
     assert page.status_code is None
     assert page.error == "browser failed"
-    assert crawler.arun.call_count == 3
-    assert mock_sleep.call_count == 2
+    assert crawler.arun.call_count == 4
+    assert [call.args[0] for call in mock_sleep.await_args_list] == [1, 2, 4]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_respects_retry_after_seconds():
+    result = _crawl_result(success=False, status_code=429)
+    result.response_headers = {"Retry-After": "180"}
+    crawler = _crawler_context(result)
+    mock_sleep = AsyncMock()
+    with (
+        patch("src.crawler.AsyncWebCrawler", return_value=crawler),
+        patch("src.crawler.asyncio.sleep", mock_sleep),
+    ):
+        await fetch_page("https://cafef.vn/article.chn")
+    assert [call.args[0] for call in mock_sleep.await_args_list] == [180, 180, 180]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_respects_retry_after_http_date():
+    now = datetime(2026, 6, 10, 4, 0, tzinfo=UTC)
+    result = _crawl_result(success=False, status_code=429)
+    result.response_headers = {"Retry-After": format_datetime(now + timedelta(seconds=90))}
+    crawler = _crawler_context(result)
+    mock_sleep = AsyncMock()
+    with (
+        patch("src.crawler.AsyncWebCrawler", return_value=crawler),
+        patch("src.crawler.asyncio.sleep", mock_sleep),
+        patch("src.crawler.datetime") as mock_datetime,
+    ):
+        mock_datetime.now.return_value = now
+        await fetch_page("https://cafef.vn/article.chn")
+    assert [call.args[0] for call in mock_sleep.await_args_list] == [90, 90, 90]

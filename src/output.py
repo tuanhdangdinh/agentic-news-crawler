@@ -70,3 +70,11 @@ def write_results(
         write_jsonl(pages, path)
     else:
         write_json(pages, path, run_meta)
+    logger.info(
+        "output summary",
+        path=path,
+        format=fmt,
+        total=len(pages),
+        successful=sum(1 for page in pages if page.success),
+        failed=sum(1 for page in pages if not page.success),
+    )

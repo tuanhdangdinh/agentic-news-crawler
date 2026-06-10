@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import structlog
@@ -35,9 +37,9 @@ _RUN_CFG = CrawlerRunConfig(
 # When a URL matches the pattern, the selector scopes the fetch to the article
 # body only, cutting 60–82% of tokens on article pages.
 _ARTICLE_SELECTORS: dict[str, tuple[str, str]] = {
-    "cafef.vn":     (r"/[^/]+-\d{9,}\.chn$",  ".detail-content"),
-    "tuoitre.vn":   (r"/[^/]+-\d{12,}\.htm$", ".detail-content"),
-    "vneconomy.vn": (r"/[^/]{30,}\.htm$",      ".block-detail-page"),
+    "cafef.vn": (r"/[^/]+-\d{9,}\.chn$", ".detail-content"),
+    "tuoitre.vn": (r"/[^/]+-\d{12,}\.htm$", ".detail-content"),
+    "vneconomy.vn": (r"/[^/]{30,}\.htm$", ".block-detail-page"),
 }
 
 _ARTICLE_TARGETS: dict[str, tuple[str, list[str]]] = {
@@ -266,7 +268,7 @@ def _extract_byline_author(html: str | None) -> str | None:
 async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
     """Run a single fetch with up to 3 retries on 5xx / exception."""
     max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(max_retries + 1):
         t0 = time.monotonic()
         try:
             async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
@@ -279,20 +281,35 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
 
                 if status == 429:
                     resp_hdrs = getattr(result, "response_headers", {}) or {}
-                    raw_retry_after = resp_hdrs.get("retry-after") or resp_hdrs.get("Retry-After") or "60"
+                    raw_retry_after = (
+                        resp_hdrs.get("retry-after") or resp_hdrs.get("Retry-After") or "60"
+                    )
                     try:
-                        # Retry-After is seconds or an HTTP-date; only seconds are honoured, capped at 120s.
-                        retry_after = min(int(raw_retry_after), 120)
+                        retry_after = max(int(raw_retry_after), 0)
                     except ValueError:
-                        retry_after = 60
-                    logger.warning("fetch 429", url=url, retry_after=retry_after, attempt=attempt + 1)
-                    if attempt < max_retries - 1:
+                        try:
+                            retry_at = parsedate_to_datetime(raw_retry_after)
+                            if retry_at.tzinfo is None:
+                                retry_at = retry_at.replace(tzinfo=UTC)
+                            retry_after = max((retry_at - datetime.now(UTC)).total_seconds(), 0)
+                        except (TypeError, ValueError, OverflowError):
+                            retry_after = 60
+                    logger.warning(
+                        "fetch 429", url=url, retry_after=retry_after, attempt=attempt + 1
+                    )
+                    if attempt < max_retries:
                         await asyncio.sleep(retry_after)
                         continue
 
-                if status >= 500 and attempt < max_retries - 1:
-                    backoff = 2 ** attempt
-                    logger.warning("fetch error retrying", status=status, url=url, backoff=backoff, attempt=attempt + 1)
+                if status >= 500 and attempt < max_retries:
+                    backoff = 2**attempt
+                    logger.warning(
+                        "fetch error retrying",
+                        status=status,
+                        url=url,
+                        backoff=backoff,
+                        attempt=attempt + 1,
+                    )
                     await asyncio.sleep(backoff)
                     continue
 
@@ -349,8 +366,8 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
 
         except Exception as exc:  # noqa: BLE001
             fetch_time = round(time.monotonic() - t0, 2)
-            if attempt < max_retries - 1:
-                backoff = 2 ** attempt
+            if attempt < max_retries:
+                backoff = 2**attempt
                 logger.warning("fetch exception retrying", url=url, exc=str(exc), backoff=backoff)
                 await asyncio.sleep(backoff)
                 continue

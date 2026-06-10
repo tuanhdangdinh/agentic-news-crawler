@@ -501,6 +501,8 @@ async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
             "page collected",
             index=len(state.pages),
             depth=depth,
+            status=page.status_code,
+            fetch_time=page.fetch_time,
             chars=len(page.markdown),
             links=len(page.links_internal),
             url=url,

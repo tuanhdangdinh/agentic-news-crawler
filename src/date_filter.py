@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from calendar import monthrange
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -26,6 +27,14 @@ _TODAY_RE = re.compile(r"\btoday\b")
 _YESTERDAY_RE = re.compile(r"\byesterday\b")
 
 
+def _rolling_month_start(today: date, months: int) -> date:
+    month_index = today.year * 12 + today.month - 1 - months
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    day = min(today.day, monthrange(year, month)[1])
+    return date(year, month, day) + timedelta(days=1)
+
+
 def _match_relative_phrase(text: str, today: date) -> tuple[date, date] | None:
     """Find a relative date phrase anywhere in ``text`` and resolve its range.
 
@@ -36,13 +45,20 @@ def _match_relative_phrase(text: str, today: date) -> tuple[date, date] | None:
     m = _LAST_N_RE.search(text)
     if m:
         n, unit = int(m.group(1)), m.group(2)
-        delta = {"day": timedelta(days=n), "week": timedelta(weeks=n), "month": timedelta(days=n * 30)}[unit]
-        return (today - delta, today)
+        if n <= 0:
+            raise ValueError("date range count must be positive")
+        if unit == "month":
+            return (_rolling_month_start(today, n), today)
+        days = {"day": n, "week": n * 7}[unit]
+        return (today - timedelta(days=days - 1), today)
 
     m = _LAST_UNIT_RE.search(text)
     if m:
-        delta = {"week": timedelta(weeks=1), "month": timedelta(days=30), "year": timedelta(days=365)}[m.group(1)]
-        return (today - delta, today)
+        unit = m.group(1)
+        if unit in {"month", "year"}:
+            return (_rolling_month_start(today, 1 if unit == "month" else 12), today)
+        days = 7
+        return (today - timedelta(days=days - 1), today)
 
     m = _THIS_UNIT_RE.search(text)
     if m:
@@ -159,9 +175,12 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
             raise ValueError(f"cannot parse date filter: {prompt!r}") from None
         for n in range(len(right_words), 0, -1):
             try:
-                return (from_date, _parse_one_date(" ".join(right_words[:n]), today))
+                to_date = _parse_one_date(" ".join(right_words[:n]), today)
             except ValueError:
                 continue
+            if from_date > to_date:
+                raise ValueError("start date must not be after end date")
+            return (from_date, to_date)
         raise ValueError(f"cannot parse date filter: {prompt!r}")
 
     # Bare single date — "2026-06-04", "June 1st", "1 thang 6"

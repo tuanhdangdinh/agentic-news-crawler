@@ -70,8 +70,17 @@ def test_write_results_json_empty_pages(tmp_path):
     assert data["pages"] == []
 
 
-def test_write_results_logs_nothing_on_success(tmp_path, caplog):
+def test_write_results_logs_output_summary(tmp_path, caplog):
     path = str(tmp_path / "out.json")
-    with caplog.at_level(logging.WARNING, logger="src.output"):
-        write_results([_page()], path)
-    assert caplog.records == []
+    with caplog.at_level(logging.INFO, logger="src.output"):
+        write_results([_page(), _page(success=False)], path)
+    payload = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if json.loads(record.message).get("event") == "output summary"
+    )
+    assert payload["path"] == path
+    assert payload["format"] == "json"
+    assert payload["total"] == 2
+    assert payload["successful"] == 1
+    assert payload["failed"] == 1

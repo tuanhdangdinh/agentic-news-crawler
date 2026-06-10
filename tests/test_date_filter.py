@@ -33,12 +33,12 @@ def _page(
 @pytest.mark.parametrize(
     ("prompt", "expected_from", "expected_to"),
     [
-        ("last 7 days", date(2026, 5, 28), date(2026, 6, 4)),
-        ("last 2 weeks", date(2026, 5, 21), date(2026, 6, 4)),
+        ("last 7 days", date(2026, 5, 29), date(2026, 6, 4)),
+        ("last 2 weeks", date(2026, 5, 22), date(2026, 6, 4)),
         ("last 1 month", date(2026, 5, 5), date(2026, 6, 4)),
-        ("last week", date(2026, 5, 28), date(2026, 6, 4)),
+        ("last week", date(2026, 5, 29), date(2026, 6, 4)),
         ("last month", date(2026, 5, 5), date(2026, 6, 4)),
-        ("last year", date(2025, 6, 4), date(2026, 6, 4)),
+        ("last year", date(2025, 6, 5), date(2026, 6, 4)),
         ("this week", date(2026, 6, 1), date(2026, 6, 4)),
         ("this month", date(2026, 6, 1), date(2026, 6, 4)),
         ("this year", date(2026, 1, 1), date(2026, 6, 4)),
@@ -67,11 +67,28 @@ def test_parse_date_filter_raises_on_unrecognised_prompt(prompt: str):
         parse_date_filter(prompt, today=_TODAY)
 
 
+def test_parse_date_filter_rejects_non_positive_count():
+    with pytest.raises(ValueError, match="positive"):
+        parse_date_filter("last 0 days", today=_TODAY)
+
+
+def test_parse_date_filter_uses_calendar_month_boundaries():
+    assert parse_date_filter("last month", today=date(2026, 3, 31)) == (
+        date(2026, 3, 1),
+        date(2026, 3, 31),
+    )
+
+
+def test_parse_date_filter_rejects_reversed_between_range():
+    with pytest.raises(ValueError, match="start date must not be after end date"):
+        parse_date_filter("between 2026-06-04 and 2026-06-01", today=_TODAY)
+
+
 @pytest.mark.parametrize(
     ("prompt", "expected_from", "expected_to"),
     [
-        ("articles from last week about banks", date(2026, 5, 28), date(2026, 6, 4)),
-        ("give me last 7 days of stock news", date(2026, 5, 28), date(2026, 6, 4)),
+        ("articles from last week about banks", date(2026, 5, 29), date(2026, 6, 4)),
+        ("give me last 7 days of stock news", date(2026, 5, 29), date(2026, 6, 4)),
         ("show me posts from this month please", date(2026, 6, 1), date(2026, 6, 4)),
         ("anything posted today would be great", date(2026, 6, 4), date(2026, 6, 4)),
         ("yesterday's banking headlines", date(2026, 6, 3), date(2026, 6, 3)),
@@ -92,8 +109,16 @@ def test_parse_date_filter_finds_relative_phrase_in_compound_text(
         ("articles published since 2026-06-01 about banks", date(2026, 6, 1), date(2026, 6, 4)),
         ("news since June 1 2026 on the stock market", date(2026, 6, 1), date(2026, 6, 4)),
         # "between … and …" embedded in a sentence
-        ("show articles between 2026-05-01 and 2026-06-01 on economy", date(2026, 5, 1), date(2026, 6, 1)),
-        ("content between May 1 2026 and June 1 2026 about banks", date(2026, 5, 1), date(2026, 6, 1)),
+        (
+            "show articles between 2026-05-01 and 2026-06-01 on economy",
+            date(2026, 5, 1),
+            date(2026, 6, 1),
+        ),
+        (
+            "content between May 1 2026 and June 1 2026 about banks",
+            date(2026, 5, 1),
+            date(2026, 6, 1),
+        ),
     ],
 )
 def test_parse_date_filter_finds_absolute_phrase_in_compound_text(
@@ -215,8 +240,10 @@ def test_is_in_range_includes_undated_page_when_flag_set():
 # detect_url_date — 2-digit year century resolution
 # ---------------------------------------------------------------------------
 
+
 def test_detect_url_date_cafef_current_year_resolves_to_2000s():
     from src.date_filter import detect_url_date
+
     # YY=26 → 2026, which is within the plausible window
     assert detect_url_date("https://cafef.vn/bai-viet-188260603074758376.chn") == date(2026, 6, 3)
 
@@ -225,6 +252,7 @@ def test_detect_url_date_cafef_far_future_yy_falls_back_to_1900s():
     from datetime import date as _date
 
     from src.date_filter import detect_url_date
+
     # YY that puts 2000+YY well past today+2years must fall back to 1900s
     # Use YY=98 → 2098 (implausible) → falls back to 1998
     result = detect_url_date("https://cafef.vn/bai-viet-188980603074758376.chn")
@@ -233,6 +261,7 @@ def test_detect_url_date_cafef_far_future_yy_falls_back_to_1900s():
 
 def test_detect_url_date_cafef_implausible_both_centuries_returns_none():
     from src.date_filter import detect_url_date
+
     # YY=50 → 2050 (too far future) → 1950 (before 1995 min) → None
     result = detect_url_date("https://cafef.vn/bai-viet-188500603074758376.chn")
     assert result is None
@@ -240,6 +269,7 @@ def test_detect_url_date_cafef_implausible_both_centuries_returns_none():
 
 def test_detect_url_date_cafef_invalid_month_returns_none():
     from src.date_filter import detect_url_date
+
     # month=13 is always invalid regardless of century
     result = detect_url_date("https://cafef.vn/bai-viet-188261303074758376.chn")
     assert result is None
