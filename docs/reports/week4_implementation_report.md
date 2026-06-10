@@ -346,7 +346,7 @@ uv run python main.py https://cafef.vn \
 
 ## Known Limitations
 
-- **One Claude call per extraction** — `extract()` creates a new `AsyncAnthropic` client per call; a shared client passed through from `run_agent` would be cleaner; still deferred
+- **~~One Claude call per extraction~~** — RESOLVED (Week 6): `infer_schema` and `extract` now accept an optional `client: AsyncAnthropic | None` parameter; `run_agent` passes its own client through `_execute_tool`, so every extraction reuses the same connection instead of creating a new one per call
 - **~~Schema inference quality~~** — RESOLVED (Rev 5): snake_case enforcement in `infer_schema.j2` plus an exact-key instruction in `extract.j2` keep field naming consistent across pages; recursive `_make_nullable` removes the nested-null validation failures; user-supplied schemas via `--extract-schema` remain the most reliable for a fixed contract
 - **No retry on extraction failure** — if Claude returns malformed JSON, the error is recorded and the page moves on; no retry attempt; acceptable at MVP scope
 - **~~Extraction not date-filtered~~** — RESOLVED (Week 5): the agent loop drops article pages outside the date range before extraction; see the Week 5 report

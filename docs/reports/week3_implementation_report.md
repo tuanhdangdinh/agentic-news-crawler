@@ -425,10 +425,10 @@ All 5 URLs embed `260602` (2026-06-02) — no stale articles. Stop reason: `max_
 
 ## Known Limitations
 
-- **`fetch_page` opens a new browser per URL** — `AsyncWebCrawler` starts and closes Playwright for every call; on a 50-page crawl this adds ~4s overhead per page; Week 4 should investigate a persistent browser session
+- **`fetch_page` opens a new browser per URL** — `AsyncWebCrawler` starts and closes Playwright for every call; on a 50-page crawl this adds ~4s overhead per page; persistent browser session not yet scheduled
 - **BFS only** — frontier is a FIFO list; no priority ordering; Claude may enqueue less-relevant pages ahead of more-relevant ones at the same depth
-- **No extraction yet** — agent reads pages and follows links but does not extract structured fields; `extract(prompt, schema)` tool comes in Week 4
-- **`--date-filter` flag not wired** — accepted by CLI but not passed to `AgentConfig` or the agent; hard date-range filtering is not enforced in code; Claude uses today's date (injected via system prompt) to reason about recency, but this relies on Claude's judgement rather than a code guardrail; wired in Week 5
+- **~~No extraction yet~~** — RESOLVED (Week 4): `extract(prompt, schema)` tool added to the agent toolset; `src/extractor.py` calls Claude with a JSON Schema and validates output with `jsonschema`
+- **~~`--date-filter` flag not wired~~** — RESOLVED (Week 5): `--date-filter` and `--include-undated` flags wired through CLI → `AgentConfig`; `run_agent` applies `detect_page_date` and `is_in_range` to drop out-of-range article pages before extraction
 - **System prompt not tested for prompt injection** — pages from untrusted sites are inserted into the user turn; malicious page content could attempt to alter agent behaviour; sanitisation not yet scheduled
 
 ---

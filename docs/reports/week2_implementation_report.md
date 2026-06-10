@@ -234,10 +234,10 @@ print(d['pages'][0]['markdown'][:200])
 
 ## Known Limitations
 
-- **Single-page only** — Week 2 fetches the seed URL and stops; recursive crawling comes in Week 3 with the agent loop
-- **No depth/max-pages enforcement** — flags are accepted but not acted on until Week 3
-- **Cold Playwright start per fetch** — `AsyncWebCrawler` opens and closes a browser instance per `fetch_page` call; Week 3 should investigate reusing a browser session across pages for performance
-- **No per-domain CSS selector overrides** — `css_selector` parameter exists but no configuration mechanism for domain-specific selectors yet; some CafeF article pages may still include sidebar noise
+- **~~Single-page only~~** — RESOLVED (Week 3): recursive crawl added with the agent loop; `run_agent` expands the frontier depth-first and respects `max_depth` and `max_pages` hard limits
+- **~~No depth/max-pages enforcement~~** — RESOLVED (Week 3): `_allowed` guardrail in `src/agent.py` enforces depth and page-count limits in code; Claude cannot override them
+- **Cold Playwright start per fetch** — `AsyncWebCrawler` opens and closes a browser instance per `fetch_page` call; on a 50-page crawl this adds ~4s overhead per page; persistent browser session not yet scheduled
+- **~~No per-domain CSS selector overrides~~** — RESOLVED (Week 6): `--css-selector` flag wires a uniform CSS selector through CLI → `AgentConfig` → `fetch_page`; per-domain override configuration remains out of scope
 
 ---
 

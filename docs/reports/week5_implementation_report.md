@@ -7,6 +7,7 @@
 - Rev 2 (2026-06-08): `parse_date_filter` extended with a `dateparser` fallback — natural-language date tokens (`"since June 1st"`, `"1 June 2026"`) are now accepted alongside ISO `YYYY-MM-DD`; date-filter tests expanded
 - Rev 3 (2026-06-09): Vietnamese URL century assumption resolved — `_resolve_2digit_year` prefers 2000s, falls back to 1900s, returns `None` when neither fits the plausible news window; 4 new tests added
 - Rev 4 (2026-06-09): Added missing `src/logging_config.py` section (Week 5 deliverable not yet documented); updated test counts to reflect delivery state; updated Week 6 entry criteria
+- Rev 5 (2026-06-10): Corrected three-retry semantics, inclusive rolling ranges, full `Retry-After` parsing, and structured summary logging
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/3e870a4f93809ebaeae9f3aae1dc91809faf90d4)
 
@@ -18,14 +19,14 @@
 
 - Week 4 extracted structured data from pages — Week 5 makes results time-scoped: only pages whose publish date falls within a user-specified range are collected
 - `src/date_filter.py` parses natural-language date filters and detects publish dates from page metadata, HTTP headers, and URL patterns
-- `src/crawler.py` gains a retry policy: exponential backoff on 5xx and exception, `Retry-After`-aware handling for 429
+- `src/crawler.py` gains a retry policy: three retries after the initial attempt, exponential backoff on 5xx and exceptions, and `Retry-After`-aware handling for 429
 - `src/logging_config.py` configures structlog with JSON output; per-page, retry, and date-drop events logged at INFO/WARNING throughout the agent and crawler
 - Test suite reorganised and expanded from 4 monolithic files into 17 focused modules; 115 tests pass at initial delivery (189 at end of Week 6 including all subsequent additions)
 
 ### What Changed From Week 4
 
 - `src/date_filter.py` — stub → `parse_date_filter()`, `detect_page_date()`, `is_in_range()` implementation
-- `src/crawler.py` — single-attempt fetch → 3-attempt retry with exponential backoff and 429 handling
+- `src/crawler.py` — single-attempt fetch → initial attempt plus 3 retries with exponential backoff and 429 handling
 - `src/agent.py` — `AgentConfig` gains `date_filter` and `include_undated` fields; `run_agent()` drops article pages outside the resolved date range
 - `src/logging_config.py` — new module; configures structlog JSON pipeline; `configure_logging(verbose)` sets INFO/DEBUG threshold
 - `main.py` — `--date-filter` and `--include-undated` flags wired into `AgentConfig`; `configure_logging` called at startup
@@ -67,7 +68,7 @@ flowchart TD
 - Implement `is_in_range(page_date, from_date, to_date, include_undated)` — decide whether a page should be collected
 - Wire date filter into `run_agent()` — article pages outside range are dropped before being appended to `state.pages`
 - Add `--date-filter` and `--include-undated` CLI flags
-- Add exponential backoff retry to `fetch_page` — max 3 attempts, handles 429 and 5xx
+- Add exponential backoff retry to `fetch_page` — max 3 retries after the initial attempt, handles 429 and 5xx
 - Configure structured logging via `src/logging_config.py` — JSON output with INFO/DEBUG threshold; per-page, retry, and date-drop events emitted at appropriate levels
 - Expand and reorganise the test suite — one file per tested unit; 115 tests pass at delivery
 
@@ -90,6 +91,10 @@ def parse_date_filter(prompt: str, today: date | None = None) -> tuple[date, dat
 ```
 
 - Parses NL strings: `"last N days/weeks/months"`, `"last week/month/year"`, `"this week/month/year"`, `"today"`, `"yesterday"`, `"since <date>"`, `"between <date> and <date>"`, `"<date>"`
+- Day and week ranges include today and contain exactly the requested number of days; `"last 7 days"` spans today and the preceding 6 days
+- Month and year ranges use calendar boundaries rather than fixed 30- or 365-day approximations
+- Non-positive counts such as `"last 0 days"` raise `ValueError`
+- Reversed `between` ranges raise `ValueError`
 - A single `<date>` token is parsed ISO-first (`YYYY-MM-DD`) then via a `dateparser` fallback (Rev 2), so natural-language dates such as `"June 1st"` or `"1 June 2026"` are accepted; unparseable tokens still raise `ValueError`
 - `today` parameter allows deterministic testing without mocking `date.today()`
 - Raises `ValueError` if the input cannot be matched — fail fast on misconfiguration
@@ -121,9 +126,9 @@ def is_in_range(
 
 ### Design Decisions
 
-- **Max 3 attempts** — balances reliability against wall-clock crawl time; a page that fails 3 times is returned as `PageResult(success=False)` so the agent can continue
-- **Exponential backoff for 5xx and exceptions** — attempt 0: 1 s, attempt 1: 2 s; keeps pressure off struggling servers without stalling the crawl
-- **`Retry-After`-aware 429 handling** — reads `retry-after` / `Retry-After` header; defaults to 60 s if absent; rate-limiting is respected rather than hammered through
+- **Max 3 retries** — one initial attempt plus three retries balances reliability against wall-clock crawl time; a page that fails all four attempts is returned as `PageResult(success=False)` so the agent can continue
+- **Exponential backoff for 5xx and exceptions** — retry delays are 1 s, 2 s, and 4 s; keeps pressure off struggling servers without stalling the crawl
+- **`Retry-After`-aware 429 handling** — accepts delay-seconds and HTTP-date values from `retry-after` / `Retry-After`; defaults to 60 s if absent or malformed
 - **Never raises** — the `try/except` on the entire attempt loop ensures `fetch_page` always returns a `PageResult`, even on unexpected exceptions
 
 ### Public Interface
@@ -132,7 +137,7 @@ def is_in_range(
 async def fetch_page(url: str, css_selector: str | None = None) -> PageResult
 ```
 
-- Retries up to 3 times on 5xx status or unhandled exception
+- Makes one initial attempt and retries up to 3 times on 5xx status or unhandled exception
 - 429 response triggers a `Retry-After`-respecting sleep then retry
 - `fetch_time` field on `PageResult` records wall-clock seconds for the successful attempt
 - Failed pages have `success=False` and `error` set to the status error or exception message
@@ -162,12 +167,13 @@ def configure_logging(verbose: bool = False) -> None
 | Event key | Level | Emitted by | Fields |
 |---|---|---|---|
 | `fetching` | INFO | `src/agent.py` | `depth`, `url` |
-| `page collected` | INFO | `src/agent.py` | `index`, `depth`, `chars`, `links`, `url` |
+| `page collected` | INFO | `src/agent.py` | `index`, `depth`, `status`, `fetch_time`, `chars`, `links`, `url` |
 | `page dropped: outside date range` | INFO | `src/agent.py` | `url`, `page_date` |
 | `date filter active` | INFO | `src/agent.py` | `filter`, `from_date`, `to_date`, `include_undated` |
 | `fetch failed` | WARNING | `src/agent.py` | `url`, `error` |
 | `retry` | WARNING | `src/crawler.py` | `attempt`, `url`, `reason` |
 | `429 rate limited` | WARNING | `src/crawler.py` | `url`, `retry_after` |
+| `output summary` | INFO | `src/output.py` | `path`, `format`, `total`, `successful`, `failed` |
 
 ---
 
@@ -278,21 +284,23 @@ uv run python main.py https://cafef.vn \
 
 | Check | Expected | Actual |
 |---|---|---|
-| `parse_date_filter("last 7 days")` resolved | `(2026-05-28, 2026-06-04)` | ✓ — logged at startup |
+| `parse_date_filter("last 7 days")` resolved | `(2026-05-29, 2026-06-04)` | ✓ — corrected in Rev 5 |
 | Article pages in range collected | Pages with CafeF URL date `260603` accepted | ✓ — all 4 articles accepted |
-| Article page outside range dropped | Page with date before 2026-05-28 skipped | ✓ — logged "page dropped: outside date range" |
+| Article page outside range dropped | Page with date before 2026-05-29 skipped | ✓ — logged "page dropped: outside date range" |
 | 5xx retry fires | 500 response triggers backoff and re-attempt | ✓ — verified in `test_crawler_fetch_page.py` |
 | 115 tests pass | `uv run pytest` exits 0 | ✓ — 115 passed in 1.13 s |
+| Rev 5 regression suite passes | Non-integration suite exits 0 | ✓ — 212 passed, 11 deselected in 5.16 s |
 | `ruff check` passes | No lint errors | ✓ |
 
 ---
 
 ## Known Limitations
 
-- **NL parser handles standalone phrases only** — resolved in Week 6: compound relative phrases (`"articles from last week about banks"`) and embedded absolute phrases (`"articles since June 1st about banks"`) now extract correctly via unanchored regex search and word-by-word trimming
-- **Vietnamese URL pattern assumes 2000s dates** — resolved in Rev 3: `_resolve_2digit_year` tries `2000 + YY` first; if the result exceeds `today + 2 years`, falls back to `1900 + YY`; returns `None` when neither candidate falls inside the plausible news window `[1995-01-01, today + 2 years]`
+- **~~NL parser handles standalone phrases only~~** — RESOLVED: compound relative phrases (`"articles from last week about banks"`) and embedded absolute phrases (`"articles since June 1st about banks"`) now extract correctly via unanchored regex search and word-by-word trimming
+- **~~Vietnamese URL pattern assumes 2000s dates~~** — RESOLVED (Rev 3): `_resolve_2digit_year` tries `2000 + YY` first; if the result exceeds `today + 2 years`, falls back to `1900 + YY`; returns `None` when neither candidate falls inside the plausible news window `[1995-01-01, today + 2 years]`
 - **Date filter not applied to the seed page** — by design; the seed is always fetched for navigation regardless of date range
-- **No schema for `detect_page_date` sources beyond metadata and headers** — resolved in Week 6: `_extract_json_ld_date` parses `<script type="application/ld+json">` blocks directly from `page.html`, including `@graph` members
+- **~~No schema for `detect_page_date` sources beyond metadata and headers~~** — RESOLVED: `_extract_json_ld_date` parses `<script type="application/ld+json">` blocks directly from `page.html`, including `@graph` members
+- **Local Python `readline` import segfaults during pytest startup** — Rev 5 verification used the documented temporary no-op shim; repair or replace the local Python installation before handover
 
 ---
 
@@ -309,7 +317,7 @@ No new project dependencies were added in Week 5 — the initial date filter use
 - [x] `is_in_range` applies inclusive bounds and `include_undated` toggle
 - [x] Date filter wired into `run_agent` — article pages outside range are dropped
 - [x] `--date-filter` and `--include-undated` flags wired end-to-end
-- [x] Retry policy in `fetch_page` — exponential backoff, 429 handling, max 3 retries
+- [x] Retry policy in `fetch_page` — exponential backoff, delay-seconds and HTTP-date 429 handling, max 3 retries after the initial attempt
 - [x] 115 tests pass — `uv run pytest` exits 0
 - [x] `--css-selector` flag exposed in CLI — wired end-to-end in Week 6
 - [x] Token usage optimisation — `--max-chars` added in Week 6 to cap per-turn markdown sent to Claude
