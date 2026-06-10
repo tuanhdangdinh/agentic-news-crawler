@@ -8,7 +8,7 @@
 - Rev 3 (2026-06-09): Vietnamese URL century assumption resolved — `_resolve_2digit_year` prefers 2000s, falls back to 1900s, returns `None` when neither fits the plausible news window; 4 new tests added
 - Rev 4 (2026-06-09): Added missing `src/logging_config.py` section (Week 5 deliverable not yet documented); updated test counts to reflect delivery state; updated Week 6 entry criteria
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/6adf41d3eda0315810dba0fc11da56d534c160a9)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/3e870a4f93809ebaeae9f3aae1dc91809faf90d4)
 
 ---
 
