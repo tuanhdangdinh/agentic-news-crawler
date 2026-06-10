@@ -7,7 +7,7 @@
 - Rev 2 (2026-06-09): recorded the live integration result and corrected the standalone fetch test targets
 - Rev 3 (2026-06-10): strengthened acceptance assertions, documented the Gradio and schema-registry paths, and recorded fresh verification
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/d7e6c48)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/17b19cd)
 
 ---
 
