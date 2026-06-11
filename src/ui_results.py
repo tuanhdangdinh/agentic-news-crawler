@@ -154,7 +154,7 @@ def render_financial_figures(
 
     if extra_items:
         extra_prefix_escaped = html.escape(f"{element_prefix}-figure-extra", quote=True)
-        parts.append(f'<div class="financial-figure-extra" id="{extra_prefix_escaped}" hidden>')
+        parts.append(f'<div class="financial-figure-extra" hidden id="{extra_prefix_escaped}">')
         for idx, item in enumerate(extra_items, start=max_rows):
             parts.append(render_row(item, idx))
         parts.append("</div>")

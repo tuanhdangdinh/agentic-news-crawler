@@ -128,3 +128,21 @@ def test_render_financial_figures_escapes_values_and_uses_fallbacks():
     assert "&lt;b&gt;unsafe&lt;/b&gt;" in output
     assert ">—<" in output
     assert "financial-figure-meta" not in output
+
+
+def test_render_financial_figures_hides_rows_after_limit():
+    figures = [{"metric": f"Metric {index}", "value": index} for index in range(14)]
+
+    output = render_financial_figures(
+        figures,
+        element_prefix="record-1",
+        max_rows=12,
+    )
+
+    assert output.count('class="financial-figure"') == 14
+    assert 'id="record-1-figure-extra"' in output
+    assert 'class="financial-figure-extra" hidden' in output
+    assert 'aria-controls="record-1-figure-extra"' in output
+    assert 'aria-expanded="false"' in output
+    assert "Show 2 more" in output
+    assert 'onclick="rtShowFigures(this)"' in output
