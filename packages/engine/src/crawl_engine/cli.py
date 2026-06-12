@@ -9,7 +9,8 @@ from pathlib import Path
 
 import structlog
 
-from crawl_engine.agent import MAX_DEPTH_CEILING, AgentConfig, run_agent
+from crawl_engine.agent import run_agent
+from crawl_engine.config import MAX_DEPTH_CEILING, AgentConfig
 from crawl_engine.crawler import fetch_page
 from crawl_engine.logging_config import configure_logging
 from crawl_engine.output import write_results

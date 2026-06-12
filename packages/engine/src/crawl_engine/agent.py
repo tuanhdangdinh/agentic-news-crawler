@@ -11,6 +11,13 @@ import anthropic
 import structlog
 from pydantic import BaseModel, Field, computed_field
 
+from crawl_engine.config import (
+    MAX_DEPTH_CEILING as MAX_DEPTH_CEILING,
+)
+from crawl_engine.config import (
+    MODEL as MODEL,
+)
+from crawl_engine.config import AgentConfig
 from crawl_engine.crawler import fetch_page, looks_like_article_url
 from crawl_engine.date_filter import detect_page_date, is_in_range, parse_date_filter
 from crawl_engine.extractor import extract as extractor_extract
@@ -21,9 +28,7 @@ from crawl_engine.schema_registry import match_registered_schema
 
 logger = structlog.get_logger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
 MAX_TOOL_TURNS_PER_PAGE = 5
-MAX_DEPTH_CEILING = 5
 
 _NUMBER_WORDS = {
     "one": 1,
@@ -98,26 +103,6 @@ TOOLS: list[dict] = [
 # ---------------------------------------------------------------------------
 # Config and state
 # ---------------------------------------------------------------------------
-
-
-class AgentConfig(BaseModel):
-    """User-supplied parameters for a crawl run."""
-
-    goal: str = ""
-    max_depth: int = Field(default=1, ge=0, le=MAX_DEPTH_CEILING)
-    max_pages: int = 100
-    token_budget: int = 500_000
-    same_domain: bool = True
-    include_patterns: list[str] = Field(default_factory=list)
-    exclude_patterns: list[str] = Field(default_factory=list)
-    model: str = MODEL
-    extract_prompt: str = ""
-    extract_schema: dict | None = None
-    extract_schema_inferred: bool = False
-    date_filter: str = ""
-    include_undated: bool = True
-    css_selector: str = ""
-    max_chars: int = 0
 
 
 class CrawlState(BaseModel):
