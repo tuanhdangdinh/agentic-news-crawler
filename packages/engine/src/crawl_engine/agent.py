@@ -443,18 +443,21 @@ async def _agent_turn(
 # ---------------------------------------------------------------------------
 
 
-async def run_agent(seed_url: str, config: AgentConfig) -> CrawlState:
+async def run_agent(
+    seed_url: str, config: AgentConfig, state: CrawlState | None = None
+) -> CrawlState:
     """Run the full agent crawl loop.
 
     Args:
         seed_url: The URL to start crawling from.
         config: Crawl parameters and guardrails.
+        state: Existing crawl state to update, or None to create one.
 
     Returns:
         CrawlState with all collected pages and run statistics.
     """
     client = anthropic.AsyncAnthropic()
-    state = CrawlState()
+    state = state if state is not None else CrawlState()
     state.frontier.append((_canonical(seed_url), 0))
     min_articles = _parse_min_articles(config.goal)
 

@@ -495,3 +495,19 @@ async def test_run_agent_passes_css_selector_to_fetch_page():
         mock_client.messages.create = AsyncMock(return_value=_finish_response())
         await run_agent("https://cafef.vn", config)
     mock_fetch.assert_called_once_with("https://cafef.vn", css_selector="article.main")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_uses_injected_state():
+    config = AgentConfig(goal="collect news", max_pages=1)
+    injected = CrawlState()
+    with (
+        patch("crawl_engine.agent.fetch_page", AsyncMock(return_value=_page())),
+        patch("crawl_engine.agent.anthropic.AsyncAnthropic") as mock_cls,
+    ):
+        mock_client = AsyncMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_end_turn_response())
+        returned = await run_agent("https://cafef.vn", config, state=injected)
+    assert returned is injected
+    assert len(injected.pages) == 1
