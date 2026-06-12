@@ -13,6 +13,23 @@ from crawl_engine.models import PageResult
 logger = structlog.get_logger(__name__)
 
 
+def serialize_payload(payload: dict, fmt: str = "json") -> str:
+    """Serialize a result payload to JSON or JSONL text.
+
+    Args:
+        payload: A result payload with "meta" and "pages" keys.
+        fmt: "json" for the full payload, "jsonl" for one page object per line.
+
+    Returns:
+        The serialized payload as a string.
+    """
+    if fmt == "jsonl":
+        return "\n".join(
+            json.dumps(page, ensure_ascii=False) for page in payload.get("pages", [])
+        )
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def _page_record(page: PageResult) -> dict:
     """Convert a PageResult to a plain dict, dropping html to keep output lean."""
     return page.model_dump(exclude={"html", "raw_markdown"})
