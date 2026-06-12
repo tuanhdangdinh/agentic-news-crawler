@@ -1,0 +1,16 @@
+[project]
+name = "crawl-gradio"
+version = "0.1.0"
+description = "Gradio reference client for the crawl engine"
+requires-python = ">=3.11"
+dependencies = [
+    "gradio>=6.0.1,<7",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crawl_gradio"]
