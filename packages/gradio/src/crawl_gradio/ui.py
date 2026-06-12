@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import gradio as gr
-from crawl_engine.agent import AgentConfig, CrawlState, run_agent
-from crawl_engine.crawler import fetch_page
-from crawl_engine.models import PageResult
-from crawl_engine.output import write_results
+import httpx
 
+from crawl_gradio.client import download_result, poll_until_done, start_crawl
 from crawl_gradio.ui_results import (
     build_result_table,
     render_result_table_html,
@@ -524,7 +523,8 @@ def _s(value: str | None) -> str:
     return (value or "").strip()
 
 
-def _build_config(
+def _build_request(
+    seed_url: str,
     goal: str | None,
     extract_prompt: str | None,
     extract_schema: str | None,
@@ -538,70 +538,22 @@ def _build_config(
     include_undated: bool,
     css_selector: str | None,
     max_chars: float,
-) -> AgentConfig:
-    return AgentConfig(
-        goal=_s(goal),
-        extract_prompt=_s(extract_prompt),
-        extract_schema=_parse_schema(extract_schema),
-        max_depth=int(max_depth),
-        max_pages=int(max_pages),
-        token_budget=int(token_budget),
-        same_domain=same_domain,
-        include_patterns=_parse_patterns(include_patterns),
-        exclude_patterns=_parse_patterns(exclude_patterns),
-        date_filter=_s(date_filter),
-        include_undated=include_undated,
-        css_selector=_s(css_selector),
-        max_chars=int(max_chars),
-    )
-
-
-def _page_record(page: PageResult) -> dict:
-    return page.model_dump(exclude={"html", "raw_markdown"})
-
-
-def _result_payload(pages: list[PageResult], run_meta: dict) -> dict:
-    return {
-        "meta": {
-            "generated_at": datetime.now(UTC).isoformat(),
-            "total_pages": len(pages),
-            "successful": sum(page.success for page in pages),
-            "failed": sum(not page.success for page in pages),
-            **run_meta,
-        },
-        "pages": [_page_record(page) for page in pages],
-    }
-
-
-def _agent_run_meta(seed_url: str, config: AgentConfig, state: CrawlState) -> dict:
+) -> dict:
     return {
         "seed_url": seed_url,
-        "goal": config.goal,
-        "max_depth": config.max_depth,
-        "max_pages": config.max_pages,
-        "pages_collected": len(state.pages),
-        "article_pages_collected": len(state.article_pages),
-        "article_pages": state.article_pages,
-        "urls_visited": len(state.visited),
-        "total_input_tokens": state.total_input_tokens,
-        "total_output_tokens": state.total_output_tokens,
-        "finish_reason": state.finish_reason,
-        "stop_reason": state.stop_reason,
-        "frontier_at_finish": state.frontier_at_finish,
-    }
-
-
-def _direct_run_meta(seed_url: str, page: PageResult) -> dict:
-    return {
-        "seed_url": seed_url,
-        "goal": "",
-        "max_depth": 0,
-        "max_pages": 1,
-        "pages_collected": int(page.success),
-        "urls_visited": 1,
-        "total_input_tokens": 0,
-        "total_output_tokens": 0,
-        "finish_reason": "single page fetched",
+        "goal": _s(goal),
+        "extract_prompt": _s(extract_prompt),
+        "extract_schema": _parse_schema(extract_schema),
+        "max_depth": int(max_depth),
+        "max_pages": int(max_pages),
+        "token_budget": int(token_budget),
+        "same_domain": same_domain,
+        "include_patterns": _parse_patterns(include_patterns),
+        "exclude_patterns": _parse_patterns(exclude_patterns),
+        "date_filter": _s(date_filter),
+        "include_undated": include_undated,
+        "css_selector": _s(css_selector),
+        "max_chars": int(max_chars),
     }
 
 
@@ -626,15 +578,15 @@ async def run_crawl(
     css_selector: str | None,
     max_chars: float,
     output_format: str,
-) -> tuple[str, str, dict, dict, bool, str]:
-    """Run a configured crawl and return result components.
+) -> AsyncIterator[tuple]:
+    """Drive a crawl over HTTP and yield progress and result components.
 
-    Returns:
-        status, accordion table html, payload (for state),
-        payload (for json preview), extraction_requested, download path.
+    Yields:
+        Status, table HTML, payload state, JSON preview, extraction flag, and download path.
     """
     url = _validate_url(seed_url)
-    config = _build_config(
+    request = _build_request(
+        url,
         goal,
         extract_prompt,
         extract_schema,
@@ -649,31 +601,50 @@ async def run_crawl(
         css_selector,
         max_chars,
     )
+    extraction_requested = bool(_s(extract_prompt) or _s(extract_schema))
+    hold = (gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
-    if not config.goal and not config.extract_prompt:
-        page = await fetch_page(url, css_selector=config.css_selector or None)
-        pages = [page]
-        run_meta = _direct_run_meta(url, page)
-    else:
-        state = await run_agent(url, config)
-        pages = state.pages
-        run_meta = _agent_run_meta(url, config, state)
+    try:
+        job_id = await start_crawl(request)
+        status: dict = {}
+        async for status in poll_until_done(job_id):
+            if status["status"] == "running":
+                collected = status.get("progress", {}).get("pages_collected", 0)
+                yield (f"Running - {collected} page(s) collected...", *hold)
+    except httpx.HTTPError as exc:
+        yield (f"Engine error: {exc}", *hold)
+        return
 
-    fmt = output_format.lower()
-    output_path = _output_path(fmt)
-    write_results(pages, output_path, fmt=fmt, run_meta=run_meta)
-    payload = _result_payload(pages, run_meta)
+    if status.get("status") == "error":
+        yield (f"Crawl failed: {status.get('error')}", *hold)
+        return
 
-    extraction_requested = bool(config.extract_prompt or config.extract_schema)
+    payload = status["payload"]
     table = build_result_table(payload, "Extracted", extraction_requested=extraction_requested)
     table_html = render_result_table_html(table)
-
-    status = (
-        f"Collected {len(pages)} page(s), "
-        f"{payload['meta']['successful']} successful, "
-        f"{payload['meta']['failed']} failed."
+    meta = payload["meta"]
+    status_message = (
+        f"Collected {meta['total_pages']} page(s), "
+        f"{meta['successful']} successful, {meta['failed']} failed."
     )
-    return status, table_html, payload, payload, extraction_requested, output_path
+
+    fmt = output_format.lower()
+    try:
+        data = await download_result(job_id, fmt)
+    except httpx.HTTPError as exc:
+        yield (f"Engine error: {exc}", *hold)
+        return
+    output_path = _output_path(fmt)
+    await asyncio.to_thread(Path(output_path).write_bytes, data)
+
+    yield (
+        status_message,
+        table_html,
+        payload,
+        payload,
+        extraction_requested,
+        output_path,
+    )
 
 
 def _sample_tags(samples: list[tuple[str, str]], target: gr.Textbox) -> None:

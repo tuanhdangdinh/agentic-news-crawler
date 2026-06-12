@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
+import httpx
 import pytest
-from crawl_engine.agent import CrawlState
-from crawl_engine.models import PageResult
-from crawl_gradio.ui import _build_config, _parse_patterns, run_crawl
+from crawl_gradio import ui
 
 
-def _page() -> PageResult:
-    return PageResult(
-        url="https://cafef.vn",
-        final_url="https://cafef.vn",
-        status_code=200,
-        title="CafeF",
-        markdown="Economy news content",
-    )
+def _async_return(value):
+    async def _fn(*args, **kwargs):
+        return value
+
+    return _fn
 
 
 def test_parse_patterns_removes_blank_lines_and_whitespace():
-    assert _parse_patterns("  *article*\n\n *video*  ") == ["*article*", "*video*"]
+    assert ui._parse_patterns("  *article*\n\n *video*  ") == [
+        "*article*",
+        "*video*",
+    ]
 
 
-def test_build_config_parses_schema_and_controls():
-    config = _build_config(
+def test_build_request_parses_schema_and_controls():
+    request = ui._build_request(
+        "https://cafef.vn",
         " collect news ",
         " extract title ",
         '{"type": "object", "properties": {}}',
@@ -41,35 +39,90 @@ def test_build_config_parses_schema_and_controls():
         8000,
     )
 
-    assert config.goal == "collect news"
-    assert config.extract_prompt == "extract title"
-    assert config.extract_schema == {"type": "object", "properties": {}}
-    assert config.max_depth == 2
-    assert config.max_pages == 5
-    assert config.token_budget == 1000
-    assert config.same_domain is False
-    assert config.include_patterns == ["*article*", "*news*"]
-    assert config.exclude_patterns == ["*video*"]
-    assert config.date_filter == "last 7 days"
-    assert config.include_undated is False
-    assert config.css_selector == "article"
-    assert config.max_chars == 8000
+    assert request == {
+        "seed_url": "https://cafef.vn",
+        "goal": "collect news",
+        "extract_prompt": "extract title",
+        "extract_schema": {"type": "object", "properties": {}},
+        "max_depth": 2,
+        "max_pages": 5,
+        "token_budget": 1000,
+        "same_domain": False,
+        "include_patterns": ["*article*", "*news*"],
+        "exclude_patterns": ["*video*"],
+        "date_filter": "last 7 days",
+        "include_undated": False,
+        "css_selector": "article",
+        "max_chars": 8000,
+    }
 
 
 @pytest.mark.asyncio
-async def test_run_crawl_uses_direct_fetch_without_goal_or_extraction(tmp_path):
-    output_path = tmp_path / "result.json"
-    with (
-        patch("crawl_gradio.ui.fetch_page", AsyncMock(return_value=_page())) as mock_fetch,
-        patch("crawl_gradio.ui._output_path", return_value=str(output_path)),
-    ):
-        status, _table_html, payload, _payload2, _extraction_req, download = await run_crawl(
+async def test_run_crawl_polls_then_renders(monkeypatch, tmp_path):
+    payload = {
+        "meta": {"total_pages": 1, "successful": 1, "failed": 0},
+        "pages": [],
+    }
+
+    async def fake_poll(job_id, **kwargs):
+        assert job_id == "job1"
+        yield {"status": "running", "progress": {"pages_collected": 0}}
+        yield {"status": "done", "payload": payload}
+
+    output_path = tmp_path / "out.json"
+    monkeypatch.setattr(ui, "start_crawl", _async_return("job1"))
+    monkeypatch.setattr(ui, "poll_until_done", fake_poll)
+    monkeypatch.setattr(ui, "download_result", _async_return(b"{}"))
+    monkeypatch.setattr(ui, "_output_path", lambda fmt: str(output_path))
+
+    frames = [
+        frame
+        async for frame in ui.run_crawl(
+            "https://cafef.vn",
+            "collect news",
+            "",
+            "",
+            1,
+            5,
+            500_000,
+            True,
+            "",
+            "",
+            "",
+            False,
+            "",
+            0,
+            "json",
+        )
+    ]
+
+    statuses = [frame[0] for frame in frames]
+    assert any("Running" in status for status in statuses)
+    assert "Collected 1 page" in statuses[-1]
+    assert frames[-1][2] == payload
+    assert frames[-1][5] == str(output_path)
+    assert output_path.read_bytes() == b"{}"
+
+
+@pytest.mark.asyncio
+async def test_run_crawl_surfaces_start_error(monkeypatch):
+    request = httpx.Request("POST", "http://engine/crawl")
+    error = httpx.ConnectError("unreachable", request=request)
+
+    async def raise_error(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(ui, "start_crawl", raise_error)
+
+    frames = [
+        frame
+        async for frame in ui.run_crawl(
             "https://cafef.vn",
             "",
             "",
             "",
             1,
-            10,
+            5,
             500_000,
             True,
             "",
@@ -78,54 +131,40 @@ async def test_run_crawl_uses_direct_fetch_without_goal_or_extraction(tmp_path):
             True,
             "",
             0,
-            "JSON",
+            "json",
         )
+    ]
 
-    mock_fetch.assert_awaited_once_with("https://cafef.vn", css_selector=None)
-    assert status == "Collected 1 page(s), 1 successful, 0 failed."
-    assert payload["meta"]["max_pages"] == 1
-    assert payload["pages"][0]["title"] == "CafeF"
-    assert download == str(output_path)
-    assert output_path.exists()
+    assert frames[0][0] == "Engine error: unreachable"
 
 
 @pytest.mark.asyncio
-async def test_run_crawl_uses_agent_when_goal_is_present(tmp_path):
-    output_path = tmp_path / "result.jsonl"
-    state = CrawlState(
-        pages=[_page()],
-        visited={"https://cafef.vn"},
-        article_pages=["https://cafef.vn/article.chn"],
-        stop_reason="max_pages",
-    )
-    with (
-        patch("crawl_gradio.ui.run_agent", AsyncMock(return_value=state)) as mock_run_agent,
-        patch("crawl_gradio.ui._output_path", return_value=str(output_path)),
-    ):
-        _, _table_html, payload, _payload2, _extraction_req, download = await run_crawl(
-            "https://cafef.vn",
-            "collect economy news",
-            "extract title",
-            "",
-            2,
-            5,
-            1000,
-            False,
-            "*article*",
-            "*video*",
-            "last 7 days",
-            False,
-            "article",
-            8000,
-            "JSONL",
-        )
+async def test_run_crawl_surfaces_terminal_job_error(monkeypatch):
+    async def fake_poll(job_id, **kwargs):
+        yield {"status": "error", "error": "boom"}
 
-    config = mock_run_agent.call_args.args[1]
-    assert config.goal == "collect economy news"
-    assert config.extract_prompt == "extract title"
-    assert config.max_depth == 2
-    assert config.max_pages == 5
-    assert payload["meta"]["article_pages_collected"] == 1
-    assert payload["meta"]["stop_reason"] == "max_pages"
-    assert download == str(output_path)
-    assert output_path.exists()
+    monkeypatch.setattr(ui, "start_crawl", _async_return("job1"))
+    monkeypatch.setattr(ui, "poll_until_done", fake_poll)
+
+    frames = [
+        frame
+        async for frame in ui.run_crawl(
+            "https://cafef.vn",
+            "",
+            "",
+            "",
+            1,
+            5,
+            500_000,
+            True,
+            "",
+            "",
+            "",
+            True,
+            "",
+            0,
+            "json",
+        )
+    ]
+
+    assert frames[0][0] == "Crawl failed: boom"

@@ -8,10 +8,9 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
-
-from crawl_engine.logging_config import configure_logging
 
 from crawl_gradio.ui import _RESULT_JS, CUSTOM_CSS, build_demo
 
@@ -48,7 +47,7 @@ def main() -> None:
         sys.exit(1)
 
     payload = json.loads(path.read_text())
-    configure_logging(verbose=False)
+    logging.basicConfig(level=logging.INFO)
     build_demo(initial_payload=payload).queue(default_concurrency_limit=1).launch(
         css=f"{CUSTOM_CSS}\n{DEV_UI_CSS}",
         head=DEV_UI_HEAD,
