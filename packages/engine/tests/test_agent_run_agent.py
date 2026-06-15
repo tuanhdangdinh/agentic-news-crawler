@@ -90,7 +90,9 @@ async def test_run_agent_infers_schema_once_before_loop():
     with (
         patch("crawl_engine.agent.fetch_page", AsyncMock(return_value=_page())),
         patch("crawl_engine.agent.anthropic.AsyncAnthropic") as mock_cls,
-        patch("crawl_engine.agent.infer_schema", AsyncMock(return_value=_INFERRED_SCHEMA)) as mock_infer,
+        patch(
+            "crawl_engine.agent.infer_schema", AsyncMock(return_value=_INFERRED_SCHEMA)
+        ) as mock_infer,
     ):
         mock_client = AsyncMock()
         mock_cls.return_value = mock_client
@@ -133,7 +135,9 @@ async def test_run_agent_skips_infer_schema_when_schema_provided():
     with (
         patch("crawl_engine.agent.fetch_page", AsyncMock(return_value=_page())),
         patch("crawl_engine.agent.anthropic.AsyncAnthropic") as mock_cls,
-        patch("crawl_engine.agent.infer_schema", AsyncMock(return_value=_INFERRED_SCHEMA)) as mock_infer,
+        patch(
+            "crawl_engine.agent.infer_schema", AsyncMock(return_value=_INFERRED_SCHEMA)
+        ) as mock_infer,
     ):
         mock_client = AsyncMock()
         mock_cls.return_value = mock_client
@@ -424,7 +428,9 @@ async def test_run_agent_auto_extracts_from_article_pages():
     with (
         patch("crawl_engine.agent.fetch_page", AsyncMock(return_value=article)),
         patch("crawl_engine.agent.anthropic.AsyncAnthropic") as mock_cls,
-        patch("crawl_engine.agent.extractor_extract", AsyncMock(return_value=extracted)) as mock_extract,
+        patch(
+            "crawl_engine.agent.extractor_extract", AsyncMock(return_value=extracted)
+        ) as mock_extract,
     ):
         mock_client = AsyncMock()
         mock_cls.return_value = mock_client
@@ -446,7 +452,9 @@ async def test_run_agent_auto_extract_is_lenient_for_inferred_schema():
         patch("crawl_engine.agent.fetch_page", AsyncMock(return_value=article)),
         patch("crawl_engine.agent.anthropic.AsyncAnthropic") as mock_cls,
         patch("crawl_engine.agent.infer_schema", AsyncMock(return_value=_INFERRED_SCHEMA)),
-        patch("crawl_engine.agent.extractor_extract", AsyncMock(return_value={"title": "x"})) as mock_extract,
+        patch(
+            "crawl_engine.agent.extractor_extract", AsyncMock(return_value={"title": "x"})
+        ) as mock_extract,
     ):
         mock_client = AsyncMock()
         mock_cls.return_value = mock_client
@@ -494,7 +502,9 @@ async def test_run_agent_passes_css_selector_to_fetch_page():
         mock_cls.return_value = mock_client
         mock_client.messages.create = AsyncMock(return_value=_finish_response())
         await run_agent("https://cafef.vn", config)
-    mock_fetch.assert_called_once_with("https://cafef.vn", css_selector="article.main")
+    mock_fetch.assert_called_once_with(
+        "https://cafef.vn", css_selector="article.main", proxy_session=None
+    )
 
 
 @pytest.mark.asyncio

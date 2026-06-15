@@ -25,13 +25,15 @@ def _page(url: str = "https://cafef.vn", success: bool = True) -> PageResult:
 
 
 @pytest.mark.asyncio
-async def test_execute_direct_fetch_when_no_goal_or_extract():
+async def test_execute_direct_fetch_when_no_goal_or_extract(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROXY_URL", raising=False)
     request = CrawlRequest(seed_url="https://cafef.vn", css_selector=".article-body")
     with patch("crawl_engine.runner.fetch_page", AsyncMock(return_value=_page())) as mock_fetch:
         payload = await execute(request, CrawlState())
     mock_fetch.assert_awaited_once_with(
         "https://cafef.vn",
         css_selector=".article-body",
+        proxy_session=None,
     )
     assert payload["meta"]["total_pages"] == 1
     assert payload["meta"]["finish_reason"] == "single page fetched"
@@ -39,7 +41,8 @@ async def test_execute_direct_fetch_when_no_goal_or_extract():
 
 
 @pytest.mark.asyncio
-async def test_execute_runs_agent_and_fills_injected_state():
+async def test_execute_runs_agent_and_fills_injected_state(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROXY_URL", raising=False)
     request = CrawlRequest(
         seed_url="https://cafef.vn",
         goal="collect news",
@@ -48,7 +51,7 @@ async def test_execute_runs_agent_and_fills_injected_state():
     )
     state = CrawlState()
 
-    async def fake_run_agent(seed, config, state):
+    async def fake_run_agent(seed, config, state=None, *, proxy_session=None):
         state.pages.append(_page())
         state.finish_reason = "done"
         return state
@@ -62,16 +65,18 @@ async def test_execute_runs_agent_and_fills_injected_state():
     assert config.max_depth == 3
     assert config.max_pages == 7
     assert mock_run.await_args.kwargs["state"] is state
+    assert mock_run.await_args.kwargs["proxy_session"] is None
     assert payload["meta"]["pages_collected"] == 1
     assert payload["meta"]["seed_url"] == "https://cafef.vn"
 
 
 @pytest.mark.asyncio
-async def test_execute_snapshots_agent_state_lists():
+async def test_execute_snapshots_agent_state_lists(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROXY_URL", raising=False)
     request = CrawlRequest(seed_url="https://cafef.vn", goal="collect news")
     state = CrawlState()
 
-    async def fake_run_agent(seed, config, state):
+    async def fake_run_agent(seed, config, state=None, *, proxy_session=None):
         state.article_pages.append("https://cafef.vn/article")
         state.frontier_at_finish.append("https://cafef.vn/next")
         return state
@@ -87,7 +92,8 @@ async def test_execute_snapshots_agent_state_lists():
 
 
 @pytest.mark.asyncio
-async def test_execute_excludes_html_and_raw_markdown():
+async def test_execute_excludes_html_and_raw_markdown(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PROXY_URL", raising=False)
     request = CrawlRequest(seed_url="https://cafef.vn")
     page = _page()
     page.html = "<html></html>"
@@ -96,3 +102,46 @@ async def test_execute_excludes_html_and_raw_markdown():
         payload = await execute(request, CrawlState())
     assert "html" not in payload["pages"][0]
     assert "raw_markdown" not in payload["pages"][0]
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_managed_proxy_session_when_proxy_url_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROXY_URL", "http://proxy.example.com:8080")
+    monkeypatch.setenv("PROXY_PASSWORD", "secret")
+
+    captured: dict = {}
+
+    async def fake_run_agent(seed, config, state=None, *, proxy_session=None):
+        captured["proxy_session"] = proxy_session
+        state.pages.append(_page())
+        state.finish_reason = "done"
+
+    request = CrawlRequest(seed_url="https://cafef.vn", goal="collect news")
+    with patch("crawl_engine.runner.run_agent", side_effect=fake_run_agent):
+        await execute(request, CrawlState())
+
+    from crawl_engine.proxy import ManagedProxySession
+
+    assert isinstance(captured.get("proxy_session"), ManagedProxySession)
+
+
+@pytest.mark.asyncio
+async def test_execute_no_proxy_session_when_proxy_url_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PROXY_URL", raising=False)
+
+    captured: dict = {}
+
+    async def fake_run_agent(seed, config, state=None, *, proxy_session=None):
+        captured["proxy_session"] = proxy_session
+        state.pages.append(_page())
+        state.finish_reason = "done"
+
+    request = CrawlRequest(seed_url="https://cafef.vn", goal="collect news")
+    with patch("crawl_engine.runner.run_agent", side_effect=fake_run_agent):
+        await execute(request, CrawlState())
+
+    assert captured.get("proxy_session") is None
