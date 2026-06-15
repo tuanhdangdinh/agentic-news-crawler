@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
+from time import monotonic
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -63,3 +66,81 @@ class ProxyCredentials:
 
     def __str__(self) -> str:
         return self.__repr__()
+
+
+@dataclass
+class _DomainSession:
+    session_id: str
+    request_count: int
+    last_request_at: float
+
+
+class ManagedProxySession:
+    """Job-scoped sticky proxy session manager keyed on normalised domain."""
+
+    def __init__(self, settings: ProxySettings) -> None:
+        self._settings = settings
+        self._sessions: dict[str, _DomainSession] = {}
+        self._lock = asyncio.Lock()
+
+    @property
+    def settings(self) -> ProxySettings:
+        return self._settings
+
+    async def acquire_credentials(
+        self, domain: str
+    ) -> tuple[ProxyCredentials | None, float]:
+        """Atomically issue credentials for domain, computing delay from previous request.
+
+        Returns:
+            (credentials, seconds_to_wait). credentials is None when proxy is disabled.
+            Caller must sleep seconds_to_wait before using the credentials.
+        """
+        if not self._settings.enabled:
+            return None, 0.0
+
+        async with self._lock:
+            now = monotonic()
+            ds = self._sessions.get(domain)
+
+            if ds is None:
+                wait = 0.0
+                ds = _DomainSession(session_id=uuid4().hex, request_count=0, last_request_at=0.0)
+                self._sessions[domain] = ds
+            else:
+                wait = max(0.0, self._settings.domain_delay - (now - ds.last_request_at))
+                if ds.request_count >= self._settings.rotate_after_requests:
+                    self._rotate_unlocked(domain, reason="threshold")
+                    ds = self._sessions[domain]
+
+            ds.request_count += 1
+            ds.last_request_at = monotonic()
+
+            username = self._settings.username_template.format(session_id=ds.session_id)
+            return (
+                ProxyCredentials(
+                    server=self._settings.url,
+                    username=username,
+                    password=self._settings.password,
+                ),
+                wait,
+            )
+
+    def _rotate_unlocked(self, domain: str, reason: str) -> None:
+        """Replace the current domain session. Caller must hold _lock."""
+        import structlog
+
+        log = structlog.get_logger(__name__)
+        old = self._sessions.get(domain)
+        old_count = old.request_count if old else 0
+        old_prefix = old.session_id[:8] if old else "none"
+        new_session = _DomainSession(session_id=uuid4().hex, request_count=0, last_request_at=0.0)
+        self._sessions[domain] = new_session
+        log.info(
+            "proxy session rotated",
+            domain=domain,
+            reason=reason,
+            old_session_prefix=old_prefix,
+            new_session_prefix=new_session.session_id[:8],
+            requests_on_old=old_count,
+        )
