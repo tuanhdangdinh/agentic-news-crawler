@@ -102,3 +102,44 @@ async def test_acquire_credentials_domain_delay(proxy_settings: ProxySettings) -
     _, wait2 = await session.acquire_credentials("example.com")
     assert wait1 == 0.0
     assert wait2 > 0.0
+
+
+async def test_rotate_creates_new_session_id(proxy_settings: ProxySettings) -> None:
+    session = ManagedProxySession(proxy_settings)
+    creds_before, _ = await session.acquire_credentials("example.com")
+    await session.rotate("example.com", reason="test")
+    creds_after, _ = await session.acquire_credentials("example.com")
+    assert creds_before is not None and creds_after is not None
+    assert creds_before.username != creds_after.username
+
+
+async def test_auto_rotate_at_threshold() -> None:
+    settings = ProxySettings(
+        enabled=True,
+        url="http://proxy.example.com:8080",
+        username_template="user-session-{session_id}",
+        password="pass",
+        rotate_after_requests=3,
+        domain_delay=0.0,
+        block_backoff=0.0,
+    )
+    session = ManagedProxySession(settings)
+    usernames = []
+    for _ in range(4):
+        c, _ = await session.acquire_credentials("example.com")
+        assert c is not None
+        usernames.append(c.username)
+    # Acquisitions 1-3 use the same session; acquisition 4 triggers auto-rotation.
+    assert usernames[0] == usernames[1] == usernames[2]
+    assert usernames[3] != usernames[0]
+
+
+async def test_concurrent_acquire_consistent(proxy_settings: ProxySettings) -> None:
+    import asyncio
+    session = ManagedProxySession(proxy_settings)
+    results = await asyncio.gather(
+        *[session.acquire_credentials("example.com") for _ in range(5)]
+    )
+    usernames = [r[0].username for r in results if r[0] is not None]
+    assert len(usernames) == 5
+    assert len(set(usernames)) == 1  # all share the same initial session

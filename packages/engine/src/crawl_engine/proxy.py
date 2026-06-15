@@ -145,3 +145,8 @@ class ManagedProxySession:
             new_session_prefix=new_session.session_id[:8],
             requests_on_old=old_count,
         )
+
+    async def rotate(self, domain: str, *, reason: str) -> None:
+        """Retire the current session for domain. Next acquire_credentials creates a new one."""
+        async with self._lock:
+            self._rotate_unlocked(domain, reason=reason)
