@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from time import monotonic
 from uuid import uuid4
 
+import structlog
+
+_log = structlog.get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class ProxySettings:
@@ -128,15 +132,12 @@ class ManagedProxySession:
 
     def _rotate_unlocked(self, domain: str, reason: str) -> None:
         """Replace the current domain session. Caller must hold _lock."""
-        import structlog
-
-        log = structlog.get_logger(__name__)
         old = self._sessions.get(domain)
         old_count = old.request_count if old else 0
         old_prefix = old.session_id[:8] if old else "none"
         new_session = _DomainSession(session_id=uuid4().hex, request_count=0, last_request_at=0.0)
         self._sessions[domain] = new_session
-        log.info(
+        _log.info(
             "proxy session rotated",
             domain=domain,
             reason=reason,
