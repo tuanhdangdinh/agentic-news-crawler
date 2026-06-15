@@ -33,6 +33,17 @@ class ProxySettings:
             block_backoff=float(os.environ.get("PROXY_BLOCK_BACKOFF_SECONDS", "30")),
         )
 
+    def __repr__(self) -> str:
+        return (
+            f"ProxySettings(enabled={self.enabled!r}, url={self.url!r}, "
+            f"username_template={self.username_template!r}, password='***', "
+            f"rotate_after_requests={self.rotate_after_requests!r}, "
+            f"domain_delay={self.domain_delay!r}, block_backoff={self.block_backoff!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
 
 @dataclass(frozen=True)
 class ProxyCredentials:
