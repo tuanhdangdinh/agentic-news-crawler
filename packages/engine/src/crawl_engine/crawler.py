@@ -16,6 +16,7 @@ from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawl_engine.models import PageResult
+from crawl_engine.proxy import ManagedProxySession
 
 logger = structlog.get_logger(__name__)
 
@@ -128,6 +129,7 @@ _BYLINE_SELECTORS = [
 ]
 
 _MIN_SCOPED_MARKDOWN_CHARS = 200
+_MAX_PROXY_TRANSIENT_RETRIES = 3
 
 
 def article_selector_for_url(url: str) -> str | None:
@@ -348,8 +350,93 @@ def _build_success_result(url: str, result, fetch_time: float) -> PageResult:
     )
 
 
-async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
+async def _fetch_managed_proxy(
+    url: str, cfg: CrawlerRunConfig, proxy_session: ManagedProxySession
+) -> PageResult:
+    """Fetch with proxy — independent transient and block rotation counters."""
+    domain = urlparse(url).netloc.removeprefix("www.")
+    transient_retries = 0
+    block_rotations = 0
+
+    while True:
+        t0 = time.monotonic()
+        creds, wait = await proxy_session.acquire_credentials(domain)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        cfg_for_attempt = cfg.clone(proxy_config=creds.to_dict()) if creds else cfg
+        try:
+            async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
+                result = await crawler.arun(url=url, config=cfg_for_attempt)
+            fetch_time = round(time.monotonic() - t0, 2)
+        except Exception as exc:  # noqa: BLE001
+            fetch_time = round(time.monotonic() - t0, 2)
+            if transient_retries < _MAX_PROXY_TRANSIENT_RETRIES:
+                transient_retries += 1
+                backoff = 2**transient_retries
+                logger.warning("fetch exception retrying", url=url, exc=str(exc), backoff=backoff)
+                await asyncio.sleep(backoff)
+                continue
+            logger.warning("fetch exception", url=url, exc=str(exc))
+            return PageResult(
+                url=url, final_url=url, status_code=None, title=None,
+                markdown="", fetch_time=fetch_time, success=False, error=str(exc),
+            )
+
+        status = result.status_code or 0
+
+        if _is_blocked(result):
+            if block_rotations >= 1:
+                logger.warning("proxy blocked after rotation", url=url, status=status)
+                return PageResult(
+                    url=url, final_url=url, status_code=status, title=None,
+                    markdown="", fetch_time=fetch_time, success=False, error="proxy_blocked",
+                )
+            reason = "captcha" if _is_captcha_response(result) else f"http_{status}"
+            logger.warning("fetch blocked, rotating", url=url, status=status, reason=reason)
+            await proxy_session.rotate(domain, reason=reason)
+            backoff = (
+                _retry_after(result)
+                if status == 429
+                else proxy_session.settings.block_backoff
+            )
+            await asyncio.sleep(backoff)
+            block_rotations += 1
+            continue
+
+        if status >= 500:
+            if transient_retries < _MAX_PROXY_TRANSIENT_RETRIES:
+                transient_retries += 1
+                backoff = 2**transient_retries
+                logger.warning("fetch error retrying", status=status, url=url, backoff=backoff)
+                await asyncio.sleep(backoff)
+                continue
+            logger.warning("fetch failed", url=url, status=status)
+            return PageResult(
+                url=url, final_url=url, status_code=status, title=None,
+                markdown="", fetch_time=fetch_time, success=False, error=f"HTTP {status}",
+            )
+
+        if not result.success:
+            error = result.error_message or f"HTTP {status}"
+            logger.warning("fetch failed", url=url, status=status, error=error)
+            return PageResult(
+                url=url, final_url=url, status_code=status, title=None,
+                markdown="", fetch_time=fetch_time, success=False, error=error,
+            )
+
+        return _build_success_result(url, result, fetch_time)
+
+
+async def _fetch_with_retries(
+    url: str,
+    cfg: CrawlerRunConfig,
+    *,
+    proxy_session: ManagedProxySession | None = None,
+) -> PageResult:
     """Run a single fetch with up to 3 retries on 5xx / exception."""
+    if proxy_session is not None:
+        return await _fetch_managed_proxy(url, cfg, proxy_session)
     max_retries = 3
     for attempt in range(max_retries + 1):
         t0 = time.monotonic()
@@ -435,6 +522,7 @@ async def fetch_page(
     css_selector: str | None = None,
     *,
     article_body: bool = True,
+    proxy_session: ManagedProxySession | None = None,
 ) -> PageResult:
     """Fetch a single URL and return a normalised PageResult.
 
@@ -447,6 +535,8 @@ async def fetch_page(
             article selector is auto-detected and applied as target_elements —
             scoping only the markdown so head metadata (title, date) and full-page
             links survive. Pass article_body=False to always fetch the full page.
+        proxy_session: Optional managed proxy session. When provided, routing and
+            rotation are handled by _fetch_managed_proxy.
 
     Returns:
         PageResult with markdown, links, and metadata. Never raises — failures
@@ -461,7 +551,9 @@ async def fetch_page(
         target_elements = article_target_elements_for_url(url) or None
 
     logger.debug("fetch start", url=url, css_selector=css_selector, target_elements=target_elements)
-    page = await _fetch_with_retries(url, _make_cfg(css_selector, target_elements))
+    page = await _fetch_with_retries(
+        url, _make_cfg(css_selector, target_elements), proxy_session=proxy_session
+    )
 
     if (
         (css_selector or target_elements)
@@ -469,6 +561,6 @@ async def fetch_page(
         and not _has_usable_scoped_markdown(page.markdown)
     ):
         logger.warning("scoped fetch returned unusable markdown, retrying full page", url=url)
-        page = await _fetch_with_retries(url, _RUN_CFG)
+        page = await _fetch_with_retries(url, _RUN_CFG, proxy_session=proxy_session)
 
     return page

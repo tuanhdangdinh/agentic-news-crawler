@@ -585,3 +585,187 @@ def test_not_blocked_500() -> None:
 
     result = _blocked_result(500)
     assert _is_blocked(result) is False
+
+
+# ---------------------------------------------------------------------------
+# proxy session dispatch — _fetch_managed_proxy
+# ---------------------------------------------------------------------------
+
+from crawl_engine.proxy import ManagedProxySession, ProxyCredentials, ProxySettings
+
+
+def _make_proxy_session() -> MagicMock:
+    """Mock ManagedProxySession returning fixed credentials with zero delay."""
+    session = MagicMock(spec=ManagedProxySession)
+    default = (
+        ProxyCredentials(server="http://proxy:8080", username="user-abc123", password="pass"),
+        0.0,
+    )
+    session.acquire_credentials = AsyncMock(return_value=default)
+    session.rotate = AsyncMock()
+    session.settings = ProxySettings(
+        enabled=True,
+        url="http://proxy:8080",
+        username_template="user-session-{session_id}",
+        password="pass",
+        rotate_after_requests=20,
+        domain_delay=0.0,
+        block_backoff=0.0,
+    )
+    return session
+
+
+def _multi_crawler(*results: MagicMock) -> MagicMock:
+    """Crawler mock that returns successive results on each arun() call."""
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(side_effect=list(results))
+    return crawler
+
+
+@pytest.mark.asyncio
+async def test_403_no_proxy_no_rotation() -> None:
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls:
+        mock_cls.return_value = _crawler_context(_crawl_result(success=False, status_code=403))
+        result = await fetch_page("https://example.com")
+    assert result.success is False
+    assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_403_with_proxy_rotates_once_then_succeeds() -> None:
+    proxy = _make_proxy_session()
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(
+            _blocked_result(403),
+            _crawl_result(),
+        )
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_awaited_once_with("example.com", reason="http_403")
+
+
+@pytest.mark.asyncio
+async def test_second_block_after_rotation_returns_proxy_blocked() -> None:
+    proxy = _make_proxy_session()
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(
+            _blocked_result(403),
+            _blocked_result(403),
+        )
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is False
+    assert result.error == "proxy_blocked"
+    assert proxy.rotate.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_429_with_retry_after_rotates() -> None:
+    proxy = _make_proxy_session()
+    blocked = _blocked_result(429)
+    blocked.response_headers = {"Retry-After": "5"}
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ) as mock_sleep:
+        mock_cls.return_value = _multi_crawler(blocked, _crawl_result())
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_awaited_once_with("example.com", reason="http_429")
+    mock_sleep.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_captcha_triggers_rotation() -> None:
+    proxy = _make_proxy_session()
+    captcha = _blocked_result(403, html='<div id="cf-challenge-running"></div>')
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(captcha, _crawl_result())
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_awaited_once_with("example.com", reason="captcha")
+
+
+@pytest.mark.asyncio
+async def test_data_sitekey_alone_is_plain_403_not_captcha() -> None:
+    proxy = _make_proxy_session()
+    plain = _blocked_result(403, html='<form data-sitekey="key"></form>', title="Forbidden")
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(plain, _crawl_result())
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_awaited_once_with("example.com", reason="http_403")
+
+
+@pytest.mark.asyncio
+async def test_5xx_uses_transient_retry_no_rotation() -> None:
+    proxy = _make_proxy_session()
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(
+            _crawl_result(success=False, status_code=500),
+            _crawl_result(),
+        )
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_block_rotation_independent_of_transient_retries() -> None:
+    """A 5xx transient retry followed by a 403 block still gets one rotation."""
+    proxy = _make_proxy_session()
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _multi_crawler(
+            _crawl_result(success=False, status_code=500),
+            _blocked_result(403),
+            _crawl_result(),
+        )
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+    assert result.success is True
+    proxy.rotate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_domain_delay_respected() -> None:
+    """acquire_credentials returns wait > 0 on second domain call; fetch_page sleeps."""
+    creds = ProxyCredentials(server="http://p:8080", username="u", password="pw")
+    proxy = MagicMock(spec=ManagedProxySession)
+    proxy.acquire_credentials = AsyncMock(side_effect=[(creds, 0.0), (creds, 1.5)])
+    proxy.rotate = AsyncMock()
+    proxy.settings = ProxySettings(
+        enabled=True, url="http://p:8080", username_template="u-{session_id}",
+        password="pw", rotate_after_requests=20, domain_delay=2.0, block_backoff=0.0,
+    )
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ) as mock_sleep:
+        mock_cls.return_value = _crawler_context(_crawl_result())
+        await fetch_page("https://example.com", proxy_session=proxy)
+        mock_cls.return_value = _crawler_context(_crawl_result())
+        await fetch_page("https://example.com", proxy_session=proxy)
+    assert any(call.args and call.args[0] == pytest.approx(1.5) for call in mock_sleep.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_page_result_contains_no_proxy_credentials() -> None:
+    proxy = _make_proxy_session()
+    with patch("crawl_engine.crawler.AsyncWebCrawler") as mock_cls, patch(
+        "crawl_engine.crawler.asyncio.sleep"
+    ):
+        mock_cls.return_value = _crawler_context(_crawl_result())
+        result = await fetch_page("https://cafef.vn/bai-viet-123456789.chn", proxy_session=proxy)
+    result_dict = result.model_dump()
+    assert "password" not in result_dict
+    assert "proxy" not in str(result_dict).lower()
