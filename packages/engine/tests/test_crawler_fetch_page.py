@@ -460,3 +460,128 @@ def test_user_agent_identifies_tool_and_contact():
     assert USER_AGENT.startswith("crawl-tool/")
     assert "@" in USER_AGENT
     assert _BROWSER_CFG.user_agent == USER_AGENT
+
+
+# ---------------------------------------------------------------------------
+# _is_captcha_response and _is_blocked helpers
+# ---------------------------------------------------------------------------
+
+
+def _blocked_result(
+    status_code: int = 403,
+    html: str = "",
+    title: str = "Forbidden",
+) -> MagicMock:
+    result = MagicMock()
+    result.success = False
+    result.status_code = status_code
+    result.error_message = f"HTTP {status_code}"
+    result.url = "https://example.com"
+    result.html = html
+    result.metadata = {"title": title}
+    result.response_headers = {}
+    result.markdown = None
+    result.links = {}
+    return result
+
+
+# --- _is_captcha_response ---
+
+
+def test_captcha_cf_challenge_running() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(html='<div id="cf-challenge-running"></div>')
+    assert _is_captcha_response(result) is True
+
+
+def test_captcha_cf_browser_verification() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(html='<div class="cf-browser-verification"></div>')
+    assert _is_captcha_response(result) is True
+
+
+def test_captcha_cf_challenge_body() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(html='<div class="cf-challenge-body"></div>')
+    assert _is_captcha_response(result) is True
+
+
+def test_captcha_403_just_a_moment() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(status_code=403, title="Just a moment...")
+    assert _is_captcha_response(result) is True
+
+
+def test_captcha_403_verify_you_are_human() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(status_code=403, title="Verify you are human")
+    assert _is_captcha_response(result) is True
+
+
+def test_not_captcha_data_sitekey_alone() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(html='<form data-sitekey="abc123"><button>Submit</button></form>')
+    assert _is_captcha_response(result) is False
+
+
+def test_not_captcha_plain_403() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(status_code=403, html="<html>Forbidden</html>", title="Forbidden")
+    assert _is_captcha_response(result) is False
+
+
+def test_not_captcha_200_with_recaptcha_widget() -> None:
+    from crawl_engine.crawler import _is_captcha_response
+
+    result = _blocked_result(
+        status_code=200,
+        html='<div data-sitekey="key"><script src="recaptcha.net/api.js"></script></div>',
+        title="Comment on post",
+    )
+    assert _is_captcha_response(result) is False
+
+
+# --- _is_blocked ---
+
+
+def test_is_blocked_403() -> None:
+    from crawl_engine.crawler import _is_blocked
+
+    assert _is_blocked(_blocked_result(403)) is True
+
+
+def test_is_blocked_429() -> None:
+    from crawl_engine.crawler import _is_blocked
+
+    assert _is_blocked(_blocked_result(429)) is True
+
+
+def test_is_blocked_captcha_200() -> None:
+    from crawl_engine.crawler import _is_blocked
+
+    result = _blocked_result(status_code=200, html='<div id="cf-challenge-running"></div>')
+    assert _is_blocked(result) is True
+
+
+def test_not_blocked_200() -> None:
+    from crawl_engine.crawler import _is_blocked
+
+    result = MagicMock()
+    result.status_code = 200
+    result.html = ""
+    result.metadata = {}
+    assert _is_blocked(result) is False
+
+
+def test_not_blocked_500() -> None:
+    from crawl_engine.crawler import _is_blocked
+
+    result = _blocked_result(500)
+    assert _is_blocked(result) is False

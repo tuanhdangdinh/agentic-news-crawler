@@ -268,6 +268,86 @@ def _extract_byline_author(html: str | None) -> str | None:
     return None
 
 
+def _retry_after(result) -> float:
+    """Extract Retry-After seconds from a response."""
+    resp_hdrs = getattr(result, "response_headers", {}) or {}
+    raw = resp_hdrs.get("retry-after") or resp_hdrs.get("Retry-After") or "60"
+    try:
+        return max(float(raw), 0.0)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            return max((retry_at - datetime.now(UTC)).total_seconds(), 0.0)
+        except (TypeError, ValueError, OverflowError):
+            return 60.0
+
+
+def _is_captcha_response(result) -> bool:
+    """Return True only when strong challenge signals are present."""
+    html = result.html or ""
+    if (
+        'id="cf-challenge-running"' in html
+        or "cf-browser-verification" in html
+        or "cf-challenge-body" in html
+    ):
+        return True
+    status = result.status_code or 0
+    if status == 403:
+        metadata = result.metadata or {}
+        title = (metadata.get("title") or "").lower()
+        if "just a moment" in title or "verify you are human" in title:
+            return True
+    return False
+
+
+def _is_blocked(result) -> bool:
+    """Return True for 403, 429, or a detected CAPTCHA challenge."""
+    status = result.status_code or 0
+    return status in (403, 429) or _is_captcha_response(result)
+
+
+def _build_success_result(url: str, result, fetch_time: float) -> PageResult:
+    """Build a PageResult from a successful CrawlResult."""
+    md = result.markdown
+    markdown = (md.fit_markdown or md.raw_markdown) if md else ""
+    raw_markdown = md.raw_markdown if md else None
+    internal, external = _extract_links(result.links or {})
+    metadata = result.metadata or {}
+    byline_author = None
+    if looks_like_article_url(result.url or url):
+        byline_author = _extract_byline_author(result.html)
+    if byline_author:
+        metadata["byline_author"] = byline_author
+    title = metadata.get("title") or metadata.get("og:title")
+    resp_hdrs = getattr(result, "response_headers", {}) or {}
+    logger.info(
+        "fetch ok",
+        url=url,
+        status=result.status_code,
+        chars=len(markdown),
+        links=len(internal),
+        time=fetch_time,
+    )
+    return PageResult(
+        url=url,
+        final_url=result.url,
+        status_code=result.status_code,
+        title=title,
+        markdown=markdown,
+        raw_markdown=raw_markdown,
+        html=result.html,
+        links_internal=internal,
+        links_external=external,
+        metadata=metadata,
+        headers=resp_hdrs,
+        fetch_time=fetch_time,
+        success=True,
+        error=None,
+    )
+
+
 async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
     """Run a single fetch with up to 3 retries on 5xx / exception."""
     max_retries = 3
@@ -328,44 +408,7 @@ async def _fetch_with_retries(url: str, cfg: CrawlerRunConfig) -> PageResult:
                     error=error,
                 )
 
-            md = result.markdown
-            markdown = (md.fit_markdown or md.raw_markdown) if md else ""
-            raw_markdown = md.raw_markdown if md else None
-            internal, external = _extract_links(result.links or {})
-            metadata = result.metadata or {}
-            byline_author = None
-            if looks_like_article_url(result.url or url):
-                byline_author = _extract_byline_author(result.html)
-            if byline_author:
-                metadata["byline_author"] = byline_author
-            title = metadata.get("title") or metadata.get("og:title")
-            resp_hdrs = getattr(result, "response_headers", {}) or {}
-
-            logger.info(
-                "fetch ok",
-                url=url,
-                status=result.status_code,
-                chars=len(markdown),
-                links=len(internal),
-                time=fetch_time,
-            )
-
-            return PageResult(
-                url=url,
-                final_url=result.url,
-                status_code=result.status_code,
-                title=title,
-                markdown=markdown,
-                raw_markdown=raw_markdown,
-                html=result.html,
-                links_internal=internal,
-                links_external=external,
-                metadata=metadata,
-                headers=resp_hdrs,
-                fetch_time=fetch_time,
-                success=True,
-                error=None,
-            )
+            return _build_success_result(url, result, fetch_time)
 
         except Exception as exc:  # noqa: BLE001
             fetch_time = round(time.monotonic() - t0, 2)
