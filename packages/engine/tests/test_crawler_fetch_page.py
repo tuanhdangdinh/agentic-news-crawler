@@ -14,6 +14,7 @@ from crawl_engine.crawler import (
     fetch_page,
     looks_like_article_url,
 )
+from crawl_engine.proxy import ManagedProxySession, ProxyCredentials, ProxySettings
 
 
 def _crawler_context(result: MagicMock) -> MagicMock:
@@ -590,8 +591,6 @@ def test_not_blocked_500() -> None:
 # ---------------------------------------------------------------------------
 # proxy session dispatch — _fetch_managed_proxy
 # ---------------------------------------------------------------------------
-
-from crawl_engine.proxy import ManagedProxySession, ProxyCredentials, ProxySettings
 
 
 def _make_proxy_session() -> MagicMock:
