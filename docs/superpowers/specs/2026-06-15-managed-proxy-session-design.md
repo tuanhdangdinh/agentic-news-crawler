@@ -1,13 +1,17 @@
 # Design: ManagedProxySession — Job-Scoped Proxy Session Manager
 
-**Date:** 2026-06-15
-**Status:** Approved
+**Prepared:** 2026-06-15
+
+**Revision history:**
+
+- Initial draft: full design covering module structure, call chain, retry policy, CAPTCHA detection, domain delay, and tests
+- Rev 2: atomic acquisition replaces get_credentials + record_request; separate transient/block retry counters; explicit no-proxy path; domain delay moved per-attempt; CAPTCHA signals narrowed; rotate accepts reason; session ID prefix terminology; doc header and code-fence language tags added
 
 ---
 
 ## Overview
 
-Add opt-in proxy support to the crawl engine. When `PROXY_URL` is set, every fetch is routed through a username-encoded sticky session scoped to the crawl job and the target domain. When `PROXY_URL` is absent, current behaviour is preserved exactly.
+Add opt-in proxy support to the crawl engine. When `PROXY_URL` is set, every fetch is routed through a username-encoded sticky session scoped to the crawl job and the target domain. When `PROXY_URL` is absent, current behaviour is preserved exactly — including the existing same-proxy 429 retry path.
 
 Proxy credentials are never exposed to `CrawlRequest`, the Gradio package, API response payloads, or logs.
 
@@ -15,7 +19,7 @@ Proxy credentials are never exposed to `CrawlRequest`, the Gradio package, API r
 
 ## Architecture
 
-```
+```text
 execute()
   │
   ├─ ProxySettings.from_env()
@@ -26,12 +30,11 @@ execute()
   └─ run_agent(seed, config, state, proxy_session=proxy_session)   ← agent path
          └─ fetch_page(url, ..., proxy_session=proxy_session)
                 └─ _fetch_with_retries(url, cfg, proxy_session=proxy_session)
-                       ├─ seconds_until_ready(domain) → sleep if needed
-                       ├─ get_credentials(domain) → ProxyCredentials | None
+                       ├─ per-attempt: acquire_credentials(domain) → (creds, wait)
+                       ├─ sleep(wait) if wait > 0
                        ├─ cfg.clone(proxy_config=creds.to_dict())
                        ├─ arun(url, config=cfg_for_attempt)
-                       ├─ record_request(domain)
-                       └─ blocked? → rotate(domain) → backoff → retry once
+                       └─ blocked? → rotate(domain, reason=...) → backoff → retry once
 ```
 
 ---
@@ -62,13 +65,14 @@ Frozen dataclass. Fields: `server: str`, `username: str`, `password: str`.
 
 ### `_DomainSession` (internal)
 
-Dataclass: `session_id: str` (UUID4 hex), `request_count: int`, `last_request_at: float` (monotonic timestamp, set on each `record_request` call).
+Dataclass: `session_id: str` (UUID4 hex), `request_count: int`, `last_request_at: float` (monotonic timestamp, updated on each `acquire_credentials` call).
 
 ### `ManagedProxySession`
 
 Job-scoped. One instance per `execute()` invocation.
 
 State:
+
 - `_settings: ProxySettings`
 - `_sessions: dict[str, _DomainSession]` — keyed on normalised domain (`netloc` lowercased, `www.` stripped)
 - `_lock: asyncio.Lock`
@@ -78,26 +82,28 @@ All public methods are `async` and acquire `_lock`. The lock is never held durin
 #### Public API
 
 ```python
-async def get_credentials(domain: str) -> ProxyCredentials | None
+async def acquire_credentials(domain: str) -> tuple[ProxyCredentials | None, float]
 ```
-Returns `None` if `settings.enabled` is `False`. Otherwise returns `ProxyCredentials` using the current sticky session for `domain`, creating a new `_DomainSession` (UUID4 hex session ID) on first visit.
+
+Single atomic operation. Under the lock:
+
+1. On first visit, creates a new `_DomainSession` (UUID4 hex session ID, count 0).
+2. Computes `wait = max(0.0, settings.domain_delay - (monotonic() - last_request_at))` from the *previous* `last_request_at`.
+3. If `request_count >= settings.rotate_after_requests`, calls `_rotate_unlocked(domain, reason="threshold")`.
+4. Increments `request_count` and sets `last_request_at = monotonic()`.
+5. Returns `(ProxyCredentials | None, wait)`. Returns `(None, 0.0)` when not enabled.
 
 Username is constructed as `settings.username_template.format(session_id=session.session_id)`.
 
-```python
-async def rotate(domain: str) -> ProxyCredentials | None
-```
-Retires the current session for `domain`. Generates a new UUID4 hex session ID and resets `request_count` to 0. Returns credentials for the new session, or `None` if not enabled.
+The caller sleeps `wait` seconds outside the lock before using the credentials.
 
 ```python
-async def record_request(domain: str) -> None
+async def rotate(domain: str, *, reason: str) -> None
 ```
-Increments `request_count` and updates `last_request_at` to `monotonic()`. If `request_count >= settings.rotate_after_requests`, performs an in-place rotation without releasing the lock. To avoid re-entrancy, rotation logic is extracted into a private `_rotate_unlocked(domain)` method that assumes the lock is already held; `rotate()` acquires the lock then calls `_rotate_unlocked`; `record_request()` calls `_rotate_unlocked` directly.
 
-```python
-async def seconds_until_ready(domain: str) -> float
-```
-Returns `max(0.0, settings.domain_delay - (monotonic() - last_request_at))` for a previously-seen domain. Returns `0.0` for a first visit or when not enabled.
+Acquires the lock and calls `_rotate_unlocked(domain, reason=reason)`. Used externally by `_fetch_with_retries` on a blocking response. Does not return credentials — the next `acquire_credentials` call creates the new session.
+
+`_rotate_unlocked(domain, reason)` generates a new UUID4 hex session ID, resets `request_count` to 0, and logs `domain`, `session_id[:8]` (prefix), `reason`, and previous `request_count`.
 
 ---
 
@@ -115,20 +121,30 @@ Both the direct-fetch path and the `run_agent` path receive this single instance
 ### Signature changes (keyword-only, default `None`)
 
 ```python
-# runner.py
-async def execute(request, state) -> dict          # unchanged — creates session internally
-
 # agent.py
-async def run_agent(seed_url, config, state=None,
-                    *, proxy_session: ManagedProxySession | None = None) -> CrawlState
+async def run_agent(
+    seed_url: str,
+    config: AgentConfig,
+    state: CrawlState | None = None,
+    *,
+    proxy_session: ManagedProxySession | None = None,
+) -> CrawlState
 
 # crawler.py
-async def fetch_page(url, css_selector=None,
-                     *, article_body=True,
-                     proxy_session: ManagedProxySession | None = None) -> PageResult
+async def fetch_page(
+    url: str,
+    css_selector: str | None = None,
+    *,
+    article_body: bool = True,
+    proxy_session: ManagedProxySession | None = None,
+) -> PageResult
 
-async def _fetch_with_retries(url, cfg,
-                              *, proxy_session: ManagedProxySession | None = None) -> PageResult
+async def _fetch_with_retries(
+    url: str,
+    cfg: CrawlerRunConfig,
+    *,
+    proxy_session: ManagedProxySession | None = None,
+) -> PageResult
 ```
 
 Existing callers pass nothing; the no-proxy path is the default.
@@ -141,65 +157,81 @@ Proxy credentials are injected per-attempt via `cfg.clone(proxy_config=creds.to_
 
 ## Retry Policy in `_fetch_with_retries`
 
+Two fully independent paths based on whether `proxy_session` is set.
+
+### Managed-proxy path (`proxy_session` is not `None`)
+
+```python
+domain = normalised_domain(url)
+transient_retries = 0
+block_rotations = 0
+
+while True:
+    creds, wait = await proxy_session.acquire_credentials(domain)
+    if wait > 0:
+        await asyncio.sleep(wait)
+
+    cfg_for_attempt = cfg.clone(proxy_config=creds.to_dict())
+    try:
+        result = await crawler.arun(url=url, config=cfg_for_attempt)
+    except Exception as exc:
+        if transient_retries < MAX_RETRIES:
+            transient_retries += 1
+            await asyncio.sleep(2 ** transient_retries)
+            continue
+        return PageResult(success=False, error=str(exc))
+
+    if _is_blocked(result):                    # 403, 429, or CAPTCHA
+        if block_rotations >= 1:
+            return PageResult(success=False, error="proxy_blocked")
+        reason = "captcha" if _is_captcha_response(result) else f"http_{result.status_code}"
+        await proxy_session.rotate(domain, reason=reason)
+        backoff = _retry_after(result) if result.status_code == 429 else settings.block_backoff
+        await asyncio.sleep(backoff)
+        block_rotations += 1
+        continue
+
+    if result.status_code and result.status_code >= 500:
+        if transient_retries < MAX_RETRIES:
+            transient_retries += 1
+            await asyncio.sleep(2 ** transient_retries)
+            continue
+        return PageResult(success=False, error=f"HTTP {result.status_code}")
+
+    return _build_page_result(result)
 ```
-entry:
-  domain = normalised netloc of url
-  if proxy_session:
-    wait = await proxy_session.seconds_until_ready(domain)
-    if wait > 0: await asyncio.sleep(wait)
 
-  already_rotated = False
+Block rotations and transient retries are tracked with separate counters. A blocking response always gets one rotation regardless of how many transient retries have been spent.
 
-per-attempt loop (existing max_retries structure):
-  creds = await proxy_session.get_credentials(domain) if proxy_session else None
-  cfg_for_attempt = cfg.clone(proxy_config=creds.to_dict()) if creds else cfg
-  result = await crawler.arun(url=url, config=cfg_for_attempt)
-  await proxy_session.record_request(domain)   # every attempt, including fallback
+### No-proxy path (`proxy_session` is `None`)
 
-  if blocked(result):                          # 403, 429, or CAPTCHA
-    if already_rotated:
-      return PageResult(success=False, error="proxy_blocked")
-    new_creds = await proxy_session.rotate(domain)
-    backoff = retry_after_header(result) if 429 else settings.block_backoff
-    await asyncio.sleep(backoff)
-    already_rotated = True
-    continue                                   # retry with new credentials
-
-  if 5xx or exception:
-    # existing exponential backoff, same credentials (no rotation)
-    await asyncio.sleep(2 ** attempt)
-    continue
-
-  return PageResult(success=True, ...)
-```
-
-The existing same-proxy 429 retry path is removed. 429 now enters the rotation branch.
+Unchanged from current `_fetch_with_retries` — existing 429 retry (with Retry-After), existing 5xx exponential backoff, existing exception handling.
 
 ---
 
 ## CAPTCHA Detection
 
-`_is_captcha_response(result: CrawlResult) -> bool` in `crawler.py`. Checks applied cheapest-first:
+`_is_captcha_response(result: CrawlResult) -> bool` in `crawler.py`.
 
-1. Title (lowercased) contains any of: `"just a moment"`, `"verify you are human"`, `"bot detected"`, `"unusual traffic"`, `"access denied"`
-2. HTML contains `id="cf-challenge-running"` or `class="cf-browser-verification"`
-3. HTML contains `data-sitekey` attribute (reCAPTCHA / hCaptcha mount)
-4. Script or iframe `src` contains `recaptcha.net`, `hcaptcha.com`, or `/cdn-cgi/challenge`
+**Strong markers — any one is sufficient:**
 
-A plain 403 without any of the above does **not** set the CAPTCHA flag. Both plain-403 and CAPTCHA responses enter the same rotation branch — the distinction is logged but does not affect policy.
+- HTML contains `id="cf-challenge-running"`
+- HTML contains `class="cf-browser-verification"` or `class="cf-challenge-body"`
 
----
+**Phrase + status — both required together:**
 
-## Per-Domain Delay
+- `result.status_code == 403` **and** title (lowercased) contains `"just a moment"` or `"verify you are human"`
 
-`seconds_until_ready(domain)` is called once per URL, before the attempt loop. It reads `_DomainSession.last_request_at` and computes remaining delay against `settings.domain_delay`. The sleep happens in `_fetch_with_retries`; `ManagedProxySession` never sleeps.
+Signals not used as standalone classifiers: `data-sitekey`, CAPTCHA script/iframe `src`, bare `"access denied"` title. These appear on normal pages with embedded widgets and would produce false positives.
+
+A plain 403 that does not match any strong marker or the phrase+status pair is not classified as CAPTCHA. It enters the rotation branch as a plain block; the logged reason is `"http_403"` rather than `"captcha"`.
 
 ---
 
 ## Security
 
 - `ProxyCredentials.password` is excluded from `__repr__` and `__str__`.
-- Log statements include session ID hash (`session_id[:8]`), domain, rotation reason, and request count only.
+- Log statements include session ID prefix (`session_id[:8]`), domain, rotation reason, and request count only. No full session IDs or passwords.
 - `ProxyCredentials` is not added to any Pydantic model that could be serialised into a `PageResult`, `CrawlRequest`, or API response.
 
 ---
@@ -213,9 +245,9 @@ All variables are operator-only. None appear in `CrawlRequest`, `AgentConfig`, o
 | `PROXY_URL` | — | Proxy server URL. Proxy disabled if absent. |
 | `PROXY_USERNAME_TEMPLATE` | `"user-session-{session_id}"` | Provider username pattern. |
 | `PROXY_PASSWORD` | — | Proxy password. |
-| `PROXY_ROTATE_AFTER_REQUESTS` | `20` | Rotate session after this many attempts. |
+| `PROXY_ROTATE_AFTER_REQUESTS` | `20` | Rotate session after this many credentials issued. |
 | `PROXY_DOMAIN_DELAY_SECONDS` | `2` | Minimum seconds between requests to the same domain. |
-| `PROXY_BLOCK_BACKOFF_SECONDS` | `30` | Sleep after a blocking response before rotating retry. |
+| `PROXY_BLOCK_BACKOFF_SECONDS` | `30` | Sleep after a blocking response before the rotation retry. |
 
 ---
 
@@ -224,42 +256,43 @@ All variables are operator-only. None appear in `CrawlRequest`, `AgentConfig`, o
 ### `tests/test_proxy.py` (new — unit, no network)
 
 1. `ProxySettings.from_env()` → `enabled=False` when `PROXY_URL` absent
-2. `get_credentials(domain)` → `None` when not enabled
-3. First `get_credentials(domain)` → creates session with UUID4 hex session ID
-4. Second `get_credentials(same_domain)` → returns same session ID
-5. `get_credentials(different_domain)` → separate session ID
-6. `rotate(domain)` → new session ID, different from previous
-7. `record_request` × N → auto-rotates at threshold
-8. `seconds_until_ready` → `0.0` on first visit; `> 0` on immediate second visit
-9. Concurrent `get_credentials` calls → consistent state (no race)
-10. `repr(ProxyCredentials(...))` → password absent
+2. `acquire_credentials(domain)` → `(None, 0.0)` when not enabled
+3. First `acquire_credentials(domain)` → creates session with UUID4 hex session ID, returns `wait=0.0`
+4. Immediate second `acquire_credentials(same_domain)` → same session ID, `wait > 0`
+5. `acquire_credentials(different_domain)` → separate session ID
+6. `rotate(domain, reason="test")` → new session ID, different from previous
+7. `acquire_credentials` × N → auto-rotates at threshold, new session ID on next call
+8. Concurrent `acquire_credentials` calls → consistent state (no race), counts correct
+9. `repr(ProxyCredentials(...))` → password absent
 
 ### `tests/test_crawler_fetch_page.py` (extend)
 
-11. 403 + no proxy → no rotation, `PageResult(success=False)`
-12. 403 + proxy → `rotate` called once, retry attempted
-13. Second block after rotation → `PageResult(success=False, error="proxy_blocked")`, no further rotation
-14. 429 with `Retry-After: 5` → sleeps ~5 s, rotates
-15. CAPTCHA HTML (`#cf-challenge-running`) → rotation triggered
-16. Plain 403 without CAPTCHA markers → rotation triggered, `_is_captcha_response` returns `False`
-17. 5xx → exponential backoff, `rotate` never called
-18. `record_request` called for every attempt including article-to-full-page fallback
-19. Domain delay: second fetch to same domain sleeps `PROXY_DOMAIN_DELAY_SECONDS`
-20. `PageResult` contains no proxy credential fields
+10. 403 + no proxy → existing behavior; `rotate` never called
+11. 403 + proxy → `rotate` called once with `reason="http_403"`, retry attempted
+12. Second block after rotation → `PageResult(success=False, error="proxy_blocked")`, no further rotation
+13. 429 with `Retry-After: 5` header → sleeps ~5 s, rotates with `reason="http_429"`
+14. CAPTCHA response (`id="cf-challenge-running"` in HTML) → `rotate` called with `reason="captcha"`
+15. `data-sitekey` alone → `_is_captcha_response` returns `False`, enters plain-403 rotation path
+16. Plain 403 without strong CAPTCHA marker → rotation triggered, `_is_captcha_response` returns `False`
+17. 5xx → transient exponential backoff, `rotate` never called
+18. Exception on `arun` → transient retry counter incremented, `rotate` never called
+19. Block rotation does not consume transient retry budget (5xx + 403 sequence still gets both retries)
+20. Domain delay: second `acquire_credentials` to same domain returns `wait > 0`; caller sleeps
+21. `PageResult` contains no proxy credential fields
 
 ### `tests/test_runner.py` (extend)
 
-21. Direct-fetch and agent paths receive the same `ManagedProxySession` instance from `execute()`
+22. Direct-fetch and agent paths receive the same `ManagedProxySession` instance from `execute()`
 
 ---
 
 ## Crawl4AI Fields Left Unset
 
 ```python
-proxy_rotation_strategy = None
-proxy_session_id        = None
-proxy_session_ttl       = None
+proxy_rotation_strategy    = None
+proxy_session_id           = None
+proxy_session_ttl          = None
 proxy_session_auto_release = False
 ```
 
-A future static proxy-pool backend could use Crawl4AI's native rotation strategy. The current managed-provider backend injects one dynamically generated `ProxyConfig` per attempt.
+A future static proxy-pool backend could use Crawl4AI's native rotation strategy. The current managed-provider backend injects one dynamically generated `ProxyConfig` per attempt via `acquire_credentials`.
