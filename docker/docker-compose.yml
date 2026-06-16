@@ -12,7 +12,7 @@ services:
   ui:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.ui
+      dockerfile: docker/Dockerfile.gradio
     environment:
       ENGINE_URL: http://engine:8000
     ports:
