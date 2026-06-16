@@ -13,20 +13,6 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-members = [
-    "crawl-engine",
-    "crawl-gradio",
-]
-
-[manifest.dependency-groups]
-dev = [
-    { name = "pytest", specifier = ">=8.2.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.0" },
-    { name = "pytest-httpx", specifier = ">=0.30.0" },
-    { name = "ruff", specifier = ">=0.4.0" },
-]
-
 [[package]]
 name = "aiofiles"
 version = "25.1.0"
@@ -603,15 +589,17 @@ wheels = [
 ]
 
 [[package]]
-name = "crawl-engine"
+name = "crawl-tool"
 version = "0.1.0"
-source = { editable = "packages/engine" }
+source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "beautifulsoup4" },
     { name = "crawl4ai" },
     { name = "dateparser" },
     { name = "fastapi" },
+    { name = "gradio" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "jsonschema" },
     { name = "lxml" },
@@ -623,6 +611,15 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "certifi" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-httpx" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
@@ -630,6 +627,8 @@ requires-dist = [
     { name = "crawl4ai", specifier = "==0.8.6" },
     { name = "dateparser", specifier = ">=1.2.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "gradio", specifier = ">=6.0.1,<7" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "lxml", specifier = ">=5.0.0" },
@@ -641,19 +640,13 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
 ]
 
-[[package]]
-name = "crawl-gradio"
-version = "0.1.0"
-source = { editable = "packages/gradio" }
-dependencies = [
-    { name = "gradio" },
-    { name = "httpx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "gradio", specifier = ">=6.0.1,<7" },
-    { name = "httpx", specifier = ">=0.27.0" },
+[package.metadata.requires-dev]
+dev = [
+    { name = "certifi", specifier = ">=2024.0.0" },
+    { name = "pytest", specifier = ">=8.2.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.0" },
+    { name = "pytest-httpx", specifier = ">=0.35.0" },
+    { name = "ruff", specifier = ">=0.4.0" },
 ]
 
 [[package]]

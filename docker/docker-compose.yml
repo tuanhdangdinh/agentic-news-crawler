@@ -1,0 +1,21 @@
+services:
+  engine:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.engine
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+    ports:
+      - "8000:8000"
+
+  ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ui
+    environment:
+      ENGINE_URL: http://engine:8000
+    ports:
+      - "7860:7860"
+    depends_on:
+      - engine
