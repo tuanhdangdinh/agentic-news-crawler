@@ -2,6 +2,11 @@
 
 **Prepared:** 2026-06-17
 
+**Revision history:**
+
+- Initial draft.
+- Rev 2: `_PARSED_PROMPT_SCHEMA`'s `max_depth` gets `minimum`/`maximum` bounds matching `MAX_DEPTH_CEILING`, so an out-of-range depth from the prompt is rejected as a `PromptParseError`/400 in both the CLI and the HTTP API, before any job starts — not via an unvalidated `setattr` that only fails later inside `AgentConfig` construction during job execution.
+
 ---
 
 ## Overview
