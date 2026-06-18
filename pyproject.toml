@@ -44,6 +44,7 @@ packages = ["src/crawl_tool"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [".claude", ".superpowers"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -51,7 +52,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = ["--import-mode=importlib"]
+addopts = ["--import-mode=importlib", "-m", "not integration"]
 testpaths = ["tests"]
 markers = [
     "integration: end-to-end tests that hit real sites and the Claude API (deselect with '-m not integration')",

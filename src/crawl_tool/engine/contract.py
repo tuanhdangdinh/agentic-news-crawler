@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from crawl_tool.engine.config import MAX_DEPTH_CEILING, AgentConfig
 
@@ -12,7 +13,8 @@ from crawl_tool.engine.config import MAX_DEPTH_CEILING, AgentConfig
 class CrawlRequest(BaseModel):
     """A crawl request: seed URL plus the user-facing crawl parameters."""
 
-    seed_url: str
+    seed_url: str = ""
+    prompt: str | None = None
     goal: str = ""
     extract_prompt: str = ""
     extract_schema: dict | None = None
@@ -26,6 +28,12 @@ class CrawlRequest(BaseModel):
     include_undated: bool = True
     css_selector: str = ""
     max_chars: int = 0
+
+    @model_validator(mode="after")
+    def _require_seed_url_or_prompt(self) -> Self:
+        if not self.seed_url and not self.prompt:
+            raise ValueError("either seed_url or prompt must be provided")
+        return self
 
     def to_agent_config(self) -> AgentConfig:
         """Build the internal crawl configuration.

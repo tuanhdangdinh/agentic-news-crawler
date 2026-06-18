@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import pytest
+
 from crawl_tool.engine.agent import AgentConfig, CrawlState, _execute_tool
 
 
 @pytest.mark.asyncio
 async def test_finish_rejected_when_reachable_urls_in_frontier():
-    state = CrawlState(frontier=[
-        ("https://cafef.vn/article-a.chn", 1),
-        ("https://cafef.vn/article-b.chn", 1),
-    ])
+    state = CrawlState(
+        frontier=[
+            ("https://cafef.vn/article-a.chn", 1),
+            ("https://cafef.vn/article-b.chn", 1),
+        ]
+    )
     result = await _execute_tool(
         "finish",
         {"reason": "done"},

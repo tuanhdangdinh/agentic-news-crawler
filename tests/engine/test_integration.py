@@ -17,9 +17,11 @@ from unittest.mock import patch
 from urllib.parse import urlparse
 
 import pytest
+
 from crawl_tool.engine.agent import AgentConfig, run_agent
 from crawl_tool.engine.crawler import fetch_page
 from crawl_tool.engine.date_filter import detect_page_date, is_in_range
+from crawl_tool.engine.prompt_parser import parse_crawl_prompt
 
 requires_anthropic_key = pytest.mark.skipif(
     not os.getenv("ANTHROPIC_API_KEY"),
@@ -29,6 +31,21 @@ requires_anthropic_key = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Site smoke tests — crawl completes, pages returned, no crashes
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@requires_anthropic_key
+async def test_parse_crawl_prompt_live_returns_structured_request():
+    """One-shot natural-language prompt parsing returns usable crawl fields."""
+    parsed = await parse_crawl_prompt(
+        "Crawl https://cafef.vn for Vietnamese economy news from the last 7 days, max 2 pages"
+    )
+
+    assert parsed["seed_url"] == "https://cafef.vn"
+    assert "econom" in parsed.get("goal", "").lower()
+    assert parsed.get("max_pages") == 2
+    assert "last 7 days" in parsed.get("date_filter", "").lower()
 
 
 @pytest.mark.integration

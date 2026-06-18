@@ -20,6 +20,7 @@ from crawl_tool.engine.contract import (
     JobStatus,
 )
 from crawl_tool.engine.output import serialize_payload
+from crawl_tool.engine.prompt_parser import PromptParseError, parse_crawl_prompt
 from crawl_tool.engine.runner import execute
 
 logger = structlog.get_logger(__name__)
@@ -71,11 +72,7 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(title="crawl-engine", version="0.1.0")
 
-    origins = [
-        origin
-        for origin in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",")
-        if origin
-    ]
+    origins = [origin for origin in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",") if origin]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins or ["*"],
@@ -126,6 +123,19 @@ def create_app() -> FastAPI:
         Returns:
             Identifier for the created job.
         """
+        if request.prompt:
+            try:
+                parsed = await parse_crawl_prompt(request.prompt)
+            except PromptParseError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            for field, value in parsed.items():
+                if field not in request.model_fields_set:
+                    setattr(request, field, value)
+            if not request.seed_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="no seed url provided or found in prompt",
+                )
         purge_expired()
         job_id = uuid4().hex
         job = Job(request)

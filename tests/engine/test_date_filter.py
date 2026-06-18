@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+
 from crawl_tool.engine.date_filter import detect_page_date, is_in_range, parse_date_filter
 from crawl_tool.engine.models import PageResult
 

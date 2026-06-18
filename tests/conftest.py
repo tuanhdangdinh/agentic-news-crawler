@@ -4,6 +4,7 @@ from pathlib import Path
 
 import certifi
 import pytest
+
 from crawl_tool.engine.logging_config import configure_logging
 
 os.environ.setdefault(

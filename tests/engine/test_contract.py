@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
 from crawl_tool.engine.config import AgentConfig
 from crawl_tool.engine.contract import CrawlRequest, JobProgress, JobResult, JobStatus
-from pydantic import ValidationError
 
 
 def test_crawl_request_maps_to_agent_config():
@@ -51,6 +52,17 @@ def test_crawl_request_rejects_depth_above_ceiling():
 
 
 def test_crawl_request_requires_seed_url():
+    with pytest.raises(ValidationError):
+        CrawlRequest()
+
+
+def test_crawl_request_allows_prompt_only():
+    request = CrawlRequest(prompt="crawl vnexpress.net for tech news")
+    assert request.seed_url == ""
+    assert request.prompt == "crawl vnexpress.net for tech news"
+
+
+def test_crawl_request_requires_seed_url_or_prompt():
     with pytest.raises(ValidationError):
         CrawlRequest()
 

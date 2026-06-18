@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 
 import pytest
-from crawl_tool.engine.prompts import render
 from jinja2 import TemplateNotFound, UndefinedError
+
+from crawl_tool.engine.prompts import render
 
 _SYSTEM_CTX = {
     "goal": "collect economy news",

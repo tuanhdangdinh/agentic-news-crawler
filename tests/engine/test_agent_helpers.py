@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
 from crawl_tool.engine.agent import (
     AgentConfig,
     _allowed,
@@ -13,7 +15,6 @@ from crawl_tool.engine.agent import (
     _same_domain,
 )
 from crawl_tool.engine.models import PageResult
-from pydantic import ValidationError
 
 
 def _page(url: str = "https://cafef.vn", success: bool = True) -> PageResult:
@@ -98,8 +99,7 @@ def test_canonical_preserves_url_without_fragment():
 
 def test_canonical_normalizes_query_param_order():
     assert (
-        _canonical("https://cafef.vn/article.chn?b=2&a=1")
-        == "https://cafef.vn/article.chn?a=1&b=2"
+        _canonical("https://cafef.vn/article.chn?b=2&a=1") == "https://cafef.vn/article.chn?a=1&b=2"
     )
 
 

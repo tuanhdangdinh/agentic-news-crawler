@@ -87,9 +87,7 @@ def _normalize(prompt: str) -> str:
 
 
 def _contains_any(prompt: str, phrases: tuple[str, ...]) -> bool:
-    return any(
-        re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", prompt) for phrase in phrases
-    )
+    return any(re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", prompt) for phrase in phrases)
 
 
 def _contains_financial_figure_phrase(prompt: str) -> bool:

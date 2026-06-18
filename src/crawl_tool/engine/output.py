@@ -24,9 +24,7 @@ def serialize_payload(payload: dict, fmt: str = "json") -> str:
         The serialized payload as a string.
     """
     if fmt == "jsonl":
-        return "\n".join(
-            json.dumps(page, ensure_ascii=False) for page in payload.get("pages", [])
-        )
+        return "\n".join(json.dumps(page, ensure_ascii=False) for page in payload.get("pages", []))
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 

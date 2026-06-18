@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from crawl_tool.engine.proxy import ManagedProxySession, ProxyCredentials, ProxySettings
 
 
@@ -136,10 +137,9 @@ async def test_auto_rotate_at_threshold() -> None:
 
 async def test_concurrent_acquire_consistent(proxy_settings: ProxySettings) -> None:
     import asyncio
+
     session = ManagedProxySession(proxy_settings)
-    results = await asyncio.gather(
-        *[session.acquire_credentials("example.com") for _ in range(5)]
-    )
+    results = await asyncio.gather(*[session.acquire_credentials("example.com") for _ in range(5)])
     usernames = [r[0].username for r in results if r[0] is not None]
     assert len(usernames) == 5
     assert len(set(usernames)) == 1  # all share the same initial session

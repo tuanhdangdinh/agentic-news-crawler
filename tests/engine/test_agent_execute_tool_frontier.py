@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from crawl_tool.engine.agent import AgentConfig, CrawlState, _execute_tool
 from crawl_tool.engine.models import PageResult
 

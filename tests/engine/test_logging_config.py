@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import structlog
+
 from crawl_tool.engine.logging_config import configure_logging
 
 

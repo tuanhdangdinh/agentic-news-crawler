@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from crawl_tool.engine.agent import AgentConfig, CrawlState, _execute_tool
 from crawl_tool.engine.models import PageResult
 
@@ -36,7 +37,9 @@ async def test_extract_returns_error_without_current_page():
 async def test_extract_stores_result_on_current_page_metadata():
     page = _page()
     schema = {"type": "object", "properties": {"title": {"type": "string"}}}
-    with patch("crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"title": "CafeF"})):
+    with patch(
+        "crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"title": "CafeF"})
+    ):
         result = await _execute_tool(
             "extract",
             {"prompt": "extract title"},
@@ -57,7 +60,9 @@ async def test_extract_infers_schema_once_when_config_schema_missing():
     schema = {"type": "object", "properties": {"title": {"type": "string"}}}
     with (
         patch("crawl_tool.engine.agent.infer_schema", AsyncMock(return_value=schema)) as mock_infer,
-        patch("crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"title": "CafeF"})) as mock_extract,
+        patch(
+            "crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"title": "CafeF"})
+        ) as mock_extract,
     ):
         result = await _execute_tool(
             "extract",
@@ -110,7 +115,9 @@ async def test_extract_uses_registered_schema_before_inference():
 async def test_extract_stores_error_on_current_page_metadata():
     page = _page()
     schema = {"type": "object", "properties": {"title": {"type": "string"}}}
-    with patch("crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"error": "bad json"})):
+    with patch(
+        "crawl_tool.engine.agent.extractor_extract", AsyncMock(return_value={"error": "bad json"})
+    ):
         result = await _execute_tool(
             "extract",
             {"prompt": "extract title"},

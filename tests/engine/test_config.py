@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from crawl_tool.engine.config import MAX_DEPTH_CEILING, MODEL, AgentConfig
 from pydantic import ValidationError
+
+from crawl_tool.engine.config import MAX_DEPTH_CEILING, MODEL, AgentConfig
 
 
 def test_default_max_depth_is_one():

@@ -7,6 +7,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from crawl_tool.engine.agent import AgentConfig, CrawlState, run_agent
 from crawl_tool.engine.models import PageResult
 

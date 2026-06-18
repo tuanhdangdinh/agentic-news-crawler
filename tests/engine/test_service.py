@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+
 from crawl_tool.engine.agent import CrawlState
 from crawl_tool.engine.models import PageResult
+from crawl_tool.engine.prompt_parser import PromptParseError
 from crawl_tool.engine.service import JOB_TTL_SECONDS, create_app
 
 _PAYLOAD = {
@@ -57,6 +59,73 @@ async def test_crawl_job_runs_to_done_and_returns_payload():
             body = await _poll_until_terminal(client, created["job_id"])
     assert body["status"] == "done"
     assert body["payload"]["meta"]["total_pages"] == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_with_prompt_only_uses_parsed_seed_url():
+    app = create_app()
+    parsed = {"seed_url": "https://parsed.example"}
+    with (
+        patch("crawl_tool.engine.service.parse_crawl_prompt", AsyncMock(return_value=parsed)),
+        patch(
+            "crawl_tool.engine.service.execute", AsyncMock(return_value=_PAYLOAD)
+        ) as mock_execute,
+    ):
+        async with _client(app) as client:
+            created = (await client.post("/crawl", json={"prompt": "crawl something"})).json()
+            await _poll_until_terminal(client, created["job_id"])
+    request = mock_execute.call_args.args[0]
+    assert request.seed_url == "https://parsed.example"
+
+
+@pytest.mark.asyncio
+async def test_crawl_with_prompt_and_explicit_field_keeps_explicit():
+    app = create_app()
+    parsed = {"seed_url": "https://parsed.example", "max_pages": 999}
+    with (
+        patch("crawl_tool.engine.service.parse_crawl_prompt", AsyncMock(return_value=parsed)),
+        patch(
+            "crawl_tool.engine.service.execute", AsyncMock(return_value=_PAYLOAD)
+        ) as mock_execute,
+    ):
+        async with _client(app) as client:
+            created = (
+                await client.post("/crawl", json={"prompt": "crawl something", "max_pages": 20})
+            ).json()
+            await _poll_until_terminal(client, created["job_id"])
+    request = mock_execute.call_args.args[0]
+    assert request.max_pages == 20
+
+
+@pytest.mark.asyncio
+async def test_crawl_without_seed_url_or_prompt_returns_422():
+    async with _client(create_app()) as client:
+        resp = await client.post("/crawl", json={})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_crawl_prompt_with_no_seed_url_found_returns_400():
+    app = create_app()
+    with patch(
+        "crawl_tool.engine.service.parse_crawl_prompt", AsyncMock(return_value={"goal": "x"})
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/crawl", json={"prompt": "collect tech news"})
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_crawl_prompt_parse_failure_returns_400():
+    app = create_app()
+    with patch(
+        "crawl_tool.engine.service.parse_crawl_prompt",
+        AsyncMock(side_effect=PromptParseError("boom")),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/crawl", json={"prompt": "???"})
+    assert resp.status_code == 400
+    assert "boom" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

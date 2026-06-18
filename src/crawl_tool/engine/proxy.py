@@ -91,9 +91,7 @@ class ManagedProxySession:
     def settings(self) -> ProxySettings:
         return self._settings
 
-    async def acquire_credentials(
-        self, domain: str
-    ) -> tuple[ProxyCredentials | None, float]:
+    async def acquire_credentials(self, domain: str) -> tuple[ProxyCredentials | None, float]:
         """Atomically issue credentials for domain, computing delay from previous request.
 
         Returns:

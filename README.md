@@ -45,6 +45,7 @@ crawl-tool/
 ## Features
 
 - Goal-directed crawling — describe what you want in plain language
+- One-shot natural-language prompts — provide seed URL, goal, limits, date filters, and extraction intent in one string
 - Structured extraction — extract fields into JSON Schema via natural language prompt
 - Registered schemas for known financial extraction intents, with LLM inference fallback
 - CLI and browser-based Gradio workflows over the same crawl engine
@@ -95,6 +96,19 @@ source .env
 
 ## Quick Start
 
+Use one natural-language prompt for a small CafeF crawl:
+
+```bash
+uv run crawl-tool \
+  --prompt "Crawl https://cafef.vn for Vietnamese economy news from the last 7 days, max 2 pages." \
+  --output results.json
+```
+
+This prompt is parsed into structured crawl settings before the crawl starts. In a live
+smoke run it resolved to `seed_url=https://cafef.vn`, `goal="Vietnamese economy news
+from the last 7 days"`, `date_filter="last 7 days"`, and `max_pages=2`, then collected
+the CafeF homepage plus one matching article before stopping at the page cap.
+
 Crawl CafeF for the latest economy news:
 
 ```bash
@@ -135,38 +149,43 @@ or UI always takes precedence.
 ## CLI Reference
 
 ```bash
-uv run crawl-tool <url> [options]
+uv run crawl-tool [url] [options]
 # Equivalent:
-uv run python -m crawl_engine.cli <url> [options]
+uv run python -m crawl_tool.engine.cli [url] [options]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |---|---|
-| `url` | Seed URL to start crawling from |
+| `url` | Optional seed URL to start crawling from. Required unless `--prompt` includes a URL |
 
 ### Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--goal` | `""` | Natural-language crawl goal |
-| `--extract-prompt` | `""` | What to extract from each page |
+| `--prompt` | `""` | One-shot natural-language crawl description. Can fill seed URL, goal, extraction prompt, max depth, max pages, date filter, same-domain setting, and include/exclude patterns |
+| `--goal` | unset | Natural-language crawl goal. Explicit flag overrides a parsed `--prompt` value |
+| `--extract-prompt` | unset | What to extract from each page. Explicit flag overrides a parsed `--prompt` value |
 | `--extract-schema` | `""` | Path to a JSON Schema file for extraction output; validated strictly as written (`required` enforced). Inferred schemas validate leniently (missing fields → `null`) |
-| `--max-depth` | `1` | Maximum crawl depth (seed = depth 0); values above 5 are refused |
-| `--max-pages` | `100` | Maximum pages to fetch |
+| `--max-depth` | unset | Maximum crawl depth (seed = depth 0); values above 5 are refused. Falls back to parsed prompt value, then `1` |
+| `--max-pages` | unset | Maximum pages to fetch. Falls back to parsed prompt value, then `100` |
 | `--token-budget` | `500000` | Total Claude token cap across the crawl |
-| `--date-filter` | `""` | Natural-language date range, e.g. `"last 7 days"` or `"articles since June 1st"` |
-| `--include-undated` | off | Include pages with no detectable publish date |
+| `--date-filter` | unset | Natural-language date range, e.g. `"last 7 days"` or `"articles since June 1st"`. Falls back to parsed prompt value |
+| `--include-undated` / `--no-include-undated` | unset | Include pages with no detectable publish date. Falls back to parsed prompt value, then off |
 | `--css-selector` | `""` | CSS selector to scope content extraction, e.g. `"article.main-content"` |
 | `--max-chars` | `0` | Truncate page markdown to this many chars before sending to Claude; 0 = no limit |
-| `--same-domain` | on | Restrict crawl to the seed domain |
+| `--same-domain` | unset | Restrict crawl to the seed domain. Falls back to parsed prompt value, then on |
 | `--no-same-domain` | — | Allow following off-domain links |
-| `--include-pattern` | `[]` | Glob pattern URLs must match (repeatable) |
-| `--exclude-pattern` | `[]` | Glob pattern that blocks a URL (repeatable) |
+| `--include-pattern` | unset | Glob pattern URLs must match (repeatable). Falls back to parsed prompt value, then `[]` |
+| `--exclude-pattern` | unset | Glob pattern that blocks a URL (repeatable). Falls back to parsed prompt value, then `[]` |
 | `--output` | `output.json` | Output file path |
 | `--format` | `json` | Output format: `json` or `jsonl` |
 | `--verbose` | off | Enable INFO logging |
+
+`--prompt` does not parse `extract_schema`, `token_budget`, `css_selector`, or
+`max_chars`; those remain explicit-only controls. When both `--prompt` and explicit
+flags are provided, explicit flags win.
 
 ---
 
@@ -212,6 +231,20 @@ One JSON object per line — same fields as each `pages[n]` entry above, no enve
 ---
 
 ## Examples
+
+**One-shot natural-language prompt:**
+```bash
+uv run crawl-tool \
+  --prompt "Crawl https://cafef.vn for Vietnamese economy news from the last 7 days, max 2 pages." \
+  --output results.json --verbose
+```
+
+**One-shot prompt with extraction intent:**
+```bash
+uv run crawl-tool \
+  --prompt "Crawl https://cafef.vn for Vietnamese economy and finance news from the last 7 days. Stay on the same domain, follow links up to depth 1, fetch at most 10 pages, and extract each article's title, publish date, author, summary, mentioned companies, stock tickers, and key financial figures." \
+  --output results.json
+```
 
 **Crawl with URL pattern filter:**
 ```bash
@@ -259,6 +292,17 @@ docker compose up --build
 
 Any HTTP client, including a non-Python frontend, can drive the engine. The OpenAPI schema
 is available at `http://localhost:8000/openapi.json`.
+
+`POST /crawl` accepts either explicit fields such as `seed_url`, `goal`, and `max_pages`,
+or a one-shot `prompt` field:
+
+```json
+{
+  "prompt": "Crawl https://cafef.vn for Vietnamese economy news from the last 7 days, max 2 pages."
+}
+```
+
+If both are present, explicit JSON fields override values parsed from `prompt`.
 
 ---
 

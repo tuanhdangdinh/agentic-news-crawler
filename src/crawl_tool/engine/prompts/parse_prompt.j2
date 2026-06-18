@@ -1,0 +1,20 @@
+Parse the following natural-language crawl request into structured fields.
+
+## Request
+{{ prompt }}
+
+## Fields
+Include a key ONLY if the request gives clear evidence for it. Do not guess or invent a default for any field.
+
+- "seed_url": the URL to start crawling. Always include the scheme (e.g. add "https://" if the user gave a bare domain like "vnexpress.net").
+- "goal": a short natural-language description of what the crawl is trying to accomplish.
+- "extract_prompt": what structured data to pull out of each page.
+- "max_depth": integer link-following depth from the seed URL.
+- "max_pages": integer maximum number of pages to fetch.
+- "date_filter": a natural-language date range fragment (e.g. "last 7 days"). Do not resolve it to actual calendar dates yourself.
+- "include_undated": boolean -- true if pages with no detectable publish date should still be included.
+- "same_domain": boolean -- true if the crawl should stay on the seed URL's domain.
+- "include_patterns": array of URL glob patterns to include.
+- "exclude_patterns": array of URL glob patterns to exclude.
+
+Respond with a single JSON object containing only the keys you found evidence for -- no markdown code fences, no explanation, no extra keys.

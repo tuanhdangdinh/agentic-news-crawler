@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from crawl_tool.engine.agent import CrawlState
 from crawl_tool.engine.contract import CrawlRequest
 from crawl_tool.engine.models import PageResult
@@ -28,7 +29,9 @@ def _page(url: str = "https://cafef.vn", success: bool = True) -> PageResult:
 async def test_execute_direct_fetch_when_no_goal_or_extract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PROXY_URL", raising=False)
     request = CrawlRequest(seed_url="https://cafef.vn", css_selector=".article-body")
-    with patch("crawl_tool.engine.runner.fetch_page", AsyncMock(return_value=_page())) as mock_fetch:
+    with patch(
+        "crawl_tool.engine.runner.fetch_page", AsyncMock(return_value=_page())
+    ) as mock_fetch:
         payload = await execute(request, CrawlState())
     mock_fetch.assert_awaited_once_with(
         "https://cafef.vn",

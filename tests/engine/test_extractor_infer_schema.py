@@ -6,8 +6,9 @@ import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import crawl_tool.engine.extractor as extractor_mod
 import pytest
+
+import crawl_tool.engine.extractor as extractor_mod
 from crawl_tool.engine.extractor import infer_schema
 
 

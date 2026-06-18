@@ -379,8 +379,14 @@ async def _fetch_managed_proxy(
                 continue
             logger.warning("fetch exception", url=url, exc=str(exc))
             return PageResult(
-                url=url, final_url=url, status_code=None, title=None,
-                markdown="", fetch_time=fetch_time, success=False, error=str(exc),
+                url=url,
+                final_url=url,
+                status_code=None,
+                title=None,
+                markdown="",
+                fetch_time=fetch_time,
+                success=False,
+                error=str(exc),
             )
 
         status = result.status_code or 0
@@ -389,16 +395,20 @@ async def _fetch_managed_proxy(
             if block_rotations >= 1:
                 logger.warning("proxy blocked after rotation", url=url, status=status)
                 return PageResult(
-                    url=url, final_url=url, status_code=status, title=None,
-                    markdown="", fetch_time=fetch_time, success=False, error="proxy_blocked",
+                    url=url,
+                    final_url=url,
+                    status_code=status,
+                    title=None,
+                    markdown="",
+                    fetch_time=fetch_time,
+                    success=False,
+                    error="proxy_blocked",
                 )
             reason = "captcha" if _is_captcha_response(result) else f"http_{status}"
             logger.warning("fetch blocked, rotating", url=url, status=status, reason=reason)
             await proxy_session.rotate(domain, reason=reason)
             backoff = (
-                _retry_after(result)
-                if status == 429
-                else proxy_session.settings.block_backoff
+                _retry_after(result) if status == 429 else proxy_session.settings.block_backoff
             )
             await asyncio.sleep(backoff)
             block_rotations += 1
@@ -413,16 +423,28 @@ async def _fetch_managed_proxy(
                 continue
             logger.warning("fetch failed", url=url, status=status)
             return PageResult(
-                url=url, final_url=url, status_code=status, title=None,
-                markdown="", fetch_time=fetch_time, success=False, error=f"HTTP {status}",
+                url=url,
+                final_url=url,
+                status_code=status,
+                title=None,
+                markdown="",
+                fetch_time=fetch_time,
+                success=False,
+                error=f"HTTP {status}",
             )
 
         if not result.success:
             error = result.error_message or f"HTTP {status}"
             logger.warning("fetch failed", url=url, status=status, error=error)
             return PageResult(
-                url=url, final_url=url, status_code=status, title=None,
-                markdown="", fetch_time=fetch_time, success=False, error=error,
+                url=url,
+                final_url=url,
+                status_code=status,
+                title=None,
+                markdown="",
+                fetch_time=fetch_time,
+                success=False,
+                error=error,
             )
 
         return _build_success_result(url, result, fetch_time)

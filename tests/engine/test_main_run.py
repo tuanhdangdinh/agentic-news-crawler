@@ -7,21 +7,25 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from crawl_tool.engine.cli import build_parser, run
+from crawl_tool.engine.prompt_parser import PromptParseError
 
 
 @pytest.mark.asyncio
 async def test_run_direct_fetch_writes_single_page_result(tmp_path):
     out = tmp_path / "out.jsonl"
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--css-selector",
-        "main",
-        "--output",
-        str(out),
-        "--format",
-        "jsonl",
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--css-selector",
+            "main",
+            "--output",
+            str(out),
+            "--format",
+            "jsonl",
+        ]
+    )
     payload = {
         "meta": {"total_pages": 1},
         "pages": [{"url": "https://cafef.vn", "title": "CafeF"}],
@@ -43,24 +47,26 @@ async def test_run_direct_fetch_writes_single_page_result(tmp_path):
 @pytest.mark.asyncio
 async def test_run_agent_wires_week_3_config_flags(tmp_path):
     out = tmp_path / "out.json"
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--max-depth",
-        "2",
-        "--max-pages",
-        "5",
-        "--token-budget",
-        "1000",
-        "--no-same-domain",
-        "--include-pattern",
-        "*cafef.vn*",
-        "--exclude-pattern",
-        "*video*",
-        "--output",
-        str(out),
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--max-depth",
+            "2",
+            "--max-pages",
+            "5",
+            "--token-budget",
+            "1000",
+            "--no-same-domain",
+            "--include-pattern",
+            "*cafef.vn*",
+            "--exclude-pattern",
+            "*video*",
+            "--output",
+            str(out),
+        ]
+    )
     payload = {"meta": {"total_pages": 0}, "pages": []}
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
@@ -85,22 +91,24 @@ async def test_run_agent_wires_week_4_extraction_config(tmp_path):
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(json.dumps(schema), encoding="utf-8")
     out = tmp_path / "out.json"
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--extract-prompt",
-        "extract title",
-        "--extract-schema",
-        str(schema_path),
-        "--date-filter",
-        "last 7 days",
-        "--include-undated",
-        "--max-chars",
-        "2000",
-        "--output",
-        str(out),
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--extract-prompt",
+            "extract title",
+            "--extract-schema",
+            str(schema_path),
+            "--date-filter",
+            "last 7 days",
+            "--include-undated",
+            "--max-chars",
+            "2000",
+            "--output",
+            str(out),
+        ]
+    )
     payload = {"meta": {"total_pages": 0}, "pages": []}
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
@@ -118,13 +126,15 @@ async def test_run_agent_wires_week_4_extraction_config(tmp_path):
 
 @pytest.mark.asyncio
 async def test_run_max_depth_above_ceiling_skips_agent():
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--max-depth",
-        "6",
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--max-depth",
+            "6",
+        ]
+    )
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
         patch("crawl_tool.engine.cli.execute", AsyncMock()) as mock_execute,
@@ -135,13 +145,15 @@ async def test_run_max_depth_above_ceiling_skips_agent():
 
 @pytest.mark.asyncio
 async def test_run_negative_max_depth_skips_agent():
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--max-depth",
-        "-1",
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--max-depth",
+            "-1",
+        ]
+    )
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
         patch("crawl_tool.engine.cli.execute", AsyncMock()) as mock_execute,
@@ -152,13 +164,15 @@ async def test_run_negative_max_depth_skips_agent():
 
 @pytest.mark.asyncio
 async def test_run_missing_extract_schema_file_skips_agent():
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--extract-schema",
-        "missing-schema.json",
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--extract-schema",
+            "missing-schema.json",
+        ]
+    )
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
         patch("crawl_tool.engine.cli.execute", AsyncMock()) as mock_execute,
@@ -173,15 +187,17 @@ async def test_run_dispatches_schema_file_operations_to_thread(tmp_path):
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(json.dumps(schema), encoding="utf-8")
     out = tmp_path / "out.json"
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--extract-schema",
-        str(schema_path),
-        "--output",
-        str(out),
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--extract-schema",
+            str(schema_path),
+            "--output",
+            str(out),
+        ]
+    )
     payload = {"meta": {"total_pages": 0}, "pages": []}
     with (
         patch("crawl_tool.engine.cli.configure_logging"),
@@ -196,13 +212,15 @@ async def test_run_dispatches_schema_file_operations_to_thread(tmp_path):
 @pytest.mark.asyncio
 async def test_run_dispatches_output_write_to_thread(tmp_path):
     out = tmp_path / "out.json"
-    args = build_parser().parse_args([
-        "https://cafef.vn",
-        "--goal",
-        "collect economy news",
-        "--output",
-        str(out),
-    ])
+    args = build_parser().parse_args(
+        [
+            "https://cafef.vn",
+            "--goal",
+            "collect economy news",
+            "--output",
+            str(out),
+        ]
+    )
     payload = {"meta": {"total_pages": 0}, "pages": []}
     expected = json.dumps(payload, ensure_ascii=False, indent=2)
     with (
@@ -215,3 +233,116 @@ async def test_run_dispatches_output_write_to_thread(tmp_path):
     assert write_call.args[0].__name__ == "write_text"
     assert write_call.args[1] == expected
     assert write_call.kwargs == {"encoding": "utf-8"}
+
+
+@pytest.mark.asyncio
+async def test_run_uses_prompt_when_no_url_given(tmp_path):
+    out = tmp_path / "out.json"
+    args = build_parser().parse_args(
+        [
+            "--prompt",
+            "crawl vnexpress.net for tech news",
+            "--output",
+            str(out),
+        ]
+    )
+    parsed = {"seed_url": "https://vnexpress.net", "goal": "tech news"}
+    payload = {"meta": {"total_pages": 0}, "pages": []}
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch("crawl_tool.engine.cli.parse_crawl_prompt", AsyncMock(return_value=parsed)),
+        patch("crawl_tool.engine.cli.execute", AsyncMock(return_value=payload)) as mock_execute,
+    ):
+        await run(args)
+    request = mock_execute.call_args.args[0]
+    assert request.seed_url == "https://vnexpress.net"
+    assert request.goal == "tech news"
+
+
+@pytest.mark.asyncio
+async def test_run_explicit_flag_overrides_prompt(tmp_path):
+    out = tmp_path / "out.json"
+    args = build_parser().parse_args(
+        [
+            "--prompt",
+            "crawl vnexpress.net, max 50 pages",
+            "--max-pages",
+            "20",
+            "--output",
+            str(out),
+        ]
+    )
+    parsed = {"seed_url": "https://vnexpress.net", "max_pages": 50}
+    payload = {"meta": {"total_pages": 0}, "pages": []}
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch("crawl_tool.engine.cli.parse_crawl_prompt", AsyncMock(return_value=parsed)),
+        patch("crawl_tool.engine.cli.execute", AsyncMock(return_value=payload)) as mock_execute,
+    ):
+        await run(args)
+    request = mock_execute.call_args.args[0]
+    assert request.max_pages == 20
+
+
+@pytest.mark.asyncio
+async def test_run_positional_url_overrides_prompt_seed_url(tmp_path):
+    out = tmp_path / "out.json"
+    args = build_parser().parse_args(
+        [
+            "https://explicit.example",
+            "--prompt",
+            "crawl vnexpress.net",
+            "--output",
+            str(out),
+        ]
+    )
+    parsed = {"seed_url": "https://vnexpress.net"}
+    payload = {"meta": {"total_pages": 0}, "pages": []}
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch("crawl_tool.engine.cli.parse_crawl_prompt", AsyncMock(return_value=parsed)),
+        patch("crawl_tool.engine.cli.execute", AsyncMock(return_value=payload)) as mock_execute,
+    ):
+        await run(args)
+    request = mock_execute.call_args.args[0]
+    assert request.seed_url == "https://explicit.example"
+
+
+@pytest.mark.asyncio
+async def test_run_no_url_and_no_prompt_skips_agent():
+    args = build_parser().parse_args([])
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch("crawl_tool.engine.cli.execute", AsyncMock()) as mock_execute,
+    ):
+        await run(args)
+    mock_execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_parse_failure_skips_agent():
+    args = build_parser().parse_args(["--prompt", "???"])
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch(
+            "crawl_tool.engine.cli.parse_crawl_prompt",
+            AsyncMock(side_effect=PromptParseError("boom")),
+        ),
+        patch("crawl_tool.engine.cli.execute", AsyncMock()) as mock_execute,
+    ):
+        await run(args)
+    mock_execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_without_include_undated_flag_defaults_false(tmp_path):
+    out = tmp_path / "out.json"
+    args = build_parser().parse_args(["https://cafef.vn", "--output", str(out)])
+    payload = {"meta": {"total_pages": 0}, "pages": []}
+    with (
+        patch("crawl_tool.engine.cli.configure_logging"),
+        patch("crawl_tool.engine.cli.execute", AsyncMock(return_value=payload)) as mock_execute,
+    ):
+        await run(args)
+    request = mock_execute.call_args.args[0]
+    assert request.include_undated is False
