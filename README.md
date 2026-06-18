@@ -10,34 +10,36 @@ Claude drives every crawl decision — which links to follow, what to extract, w
 
 ```text
 crawl-tool/
-├── pyproject.toml              # uv workspace, Ruff, pytest and dev dependencies
-├── docker-compose.yml          # Engine and Gradio services
-├── packages/
+├── pyproject.toml                  # package metadata, dependencies, Ruff, pytest
+├── docker/
+│   ├── docker-compose.yml          # Engine and Gradio services
+│   ├── Dockerfile.engine
+│   └── Dockerfile.gradio
+├── src/crawl_tool/
 │   ├── engine/
-│   │   ├── Dockerfile
-│   │   ├── pyproject.toml
-│   │   ├── src/crawl_engine/
-│   │   │   ├── service.py      # FastAPI job API
-│   │   │   ├── runner.py       # CrawlRequest to result payload
-│   │   │   ├── contract.py     # OpenAPI request and response models
-│   │   │   ├── cli.py          # CLI entry point
-│   │   │   ├── agent.py        # LLM crawl loop
-│   │   │   ├── crawler.py      # Crawl4AI wrapper
-│   │   │   └── ...
-│   │   └── tests/
+│   │   ├── cli.py                  # CLI entry point
+│   │   ├── service.py              # FastAPI job API
+│   │   ├── runner.py               # CrawlRequest to result payload
+│   │   ├── contract.py             # API request and response models
+│   │   ├── agent.py                # LLM crawl loop
+│   │   ├── crawler.py              # Crawl4AI wrapper
+│   │   ├── prompt_parser.py        # one-shot natural-language prompt parser
+│   │   ├── extractor.py            # structured extraction
+│   │   ├── prompts/                # Jinja2 prompt templates
+│   │   └── ...
 │   └── gradio/
-│       ├── Dockerfile
-│       ├── pyproject.toml
-│       ├── src/crawl_gradio/
-│       │   ├── app.py           # Gradio launcher
-│       │   ├── client.py        # Pure HTTP engine client
-│       │   ├── ui.py            # Controls and polling handler
-│       │   └── ui_results.py
-│       └── tests/
+│       ├── app.py                  # Gradio launcher
+│       ├── client.py               # HTTP engine client
+│       ├── ui.py                   # Controls and polling handler
+│       └── ui_results.py
+├── tests/
+│   ├── engine/
+│   └── gradio/
 └── docs/
     ├── architecture.md
     ├── standards/
-    └── reports/
+    ├── reports/
+    └── superpowers/
 ```
 
 ---
