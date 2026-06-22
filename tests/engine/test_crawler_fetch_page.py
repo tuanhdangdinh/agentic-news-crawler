@@ -465,7 +465,7 @@ def test_user_agent_identifies_tool_and_contact():
 
 
 # ---------------------------------------------------------------------------
-# _is_captcha_response and _is_blocked helpers
+# _is_blocked / _block_reason — backed by Crawl4AI's native antibot_detector
 # ---------------------------------------------------------------------------
 
 
@@ -487,72 +487,6 @@ def _blocked_result(
     return result
 
 
-# --- _is_captcha_response ---
-
-
-def test_captcha_cf_challenge_running() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(html='<div id="cf-challenge-running"></div>')
-    assert _is_captcha_response(result) is True
-
-
-def test_captcha_cf_browser_verification() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(html='<div class="cf-browser-verification"></div>')
-    assert _is_captcha_response(result) is True
-
-
-def test_captcha_cf_challenge_body() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(html='<div class="cf-challenge-body"></div>')
-    assert _is_captcha_response(result) is True
-
-
-def test_captcha_403_just_a_moment() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(status_code=403, title="Just a moment...")
-    assert _is_captcha_response(result) is True
-
-
-def test_captcha_403_verify_you_are_human() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(status_code=403, title="Verify you are human")
-    assert _is_captcha_response(result) is True
-
-
-def test_not_captcha_data_sitekey_alone() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(html='<form data-sitekey="abc123"><button>Submit</button></form>')
-    assert _is_captcha_response(result) is False
-
-
-def test_not_captcha_plain_403() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(status_code=403, html="<html>Forbidden</html>", title="Forbidden")
-    assert _is_captcha_response(result) is False
-
-
-def test_not_captcha_200_with_recaptcha_widget() -> None:
-    from crawl_tool.engine.crawler import _is_captcha_response
-
-    result = _blocked_result(
-        status_code=200,
-        html='<div data-sitekey="key"><script src="recaptcha.net/api.js"></script></div>',
-        title="Comment on post",
-    )
-    assert _is_captcha_response(result) is False
-
-
-# --- _is_blocked ---
-
-
 def test_is_blocked_403() -> None:
     from crawl_tool.engine.crawler import _is_blocked
 
@@ -565,28 +499,89 @@ def test_is_blocked_429() -> None:
     assert _is_blocked(_blocked_result(429)) is True
 
 
-def test_is_blocked_captcha_200() -> None:
+def test_is_blocked_vendor_challenge_page() -> None:
     from crawl_tool.engine.crawler import _is_blocked
 
-    result = _blocked_result(status_code=200, html='<div id="cf-challenge-running"></div>')
+    result = _blocked_result(
+        status_code=403, html="<html><body><h1>Pardon Our Interruption</h1></body></html>"
+    )
     assert _is_blocked(result) is True
 
 
-def test_not_blocked_200() -> None:
+def test_not_blocked_normal_article_with_recaptcha_widget() -> None:
+    """A generic data-sitekey/recaptcha widget on a real, content-bearing page
+    is not a vendor block signature — Crawl4AI's detector should not flag it."""
+    from crawl_tool.engine.crawler import _is_blocked
+
+    html = (
+        "<html><body><article>"
+        "<p>" + ("Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 5) + "</p>"
+        '<div data-sitekey="key"><script src="https://recaptcha.net/api.js"></script></div>'
+        "</article></body></html>"
+    )
+    result = _blocked_result(status_code=200, html=html)
+    assert _is_blocked(result) is False
+
+
+def test_not_blocked_empty_200_response() -> None:
+    """An empty body on a 200 is NOT treated as blocked by itself — generic
+    near-empty/structural heuristics are deliberately not consulted outside
+    403/429, since they're calibrated for raw full-page HTML and would flag
+    ordinary short responses; only a named vendor/challenge signature counts."""
     from crawl_tool.engine.crawler import _is_blocked
 
     result = MagicMock()
     result.status_code = 200
     result.html = ""
     result.metadata = {}
+    result.error_message = None
     assert _is_blocked(result) is False
 
 
 def test_not_blocked_500() -> None:
+    """5xx is handled as a transient error with same-proxy retry, never as a
+    rotation-worthy block — excluded regardless of what the detector would say."""
     from crawl_tool.engine.crawler import _is_blocked
 
     result = _blocked_result(500)
     assert _is_blocked(result) is False
+
+
+def test_block_reason_plain_403() -> None:
+    from crawl_tool.engine.crawler import _block_reason
+
+    assert _block_reason(_blocked_result(403)) == "http_403"
+
+
+def test_block_reason_429() -> None:
+    from crawl_tool.engine.crawler import _block_reason
+
+    assert _block_reason(_blocked_result(429)) == "http_429"
+
+
+def test_block_reason_vendor_challenge_is_captcha() -> None:
+    from crawl_tool.engine.crawler import _block_reason
+
+    result = _blocked_result(
+        status_code=403, html="<html><body><h1>Pardon Our Interruption</h1></body></html>"
+    )
+    assert _block_reason(result) == "captcha"
+
+
+def test_block_reason_data_sitekey_alone_is_not_captcha() -> None:
+    """A bare data-sitekey attribute is not a vendor signature on its own —
+    must not be miscategorised as captcha."""
+    from crawl_tool.engine.crawler import _block_reason
+
+    result = _blocked_result(html='<form data-sitekey="abc123"><button>Submit</button></form>')
+    assert _block_reason(result) == "http_403"
+
+
+def test_block_reason_not_blocked_is_empty() -> None:
+    from crawl_tool.engine.crawler import _block_reason
+
+    result = _blocked_result(500)
+    assert _block_reason(result) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +645,78 @@ async def test_403_with_proxy_rotates_once_then_succeeds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_blocked_proxy_retry_uses_rotated_credentials() -> None:
+    proxy = MagicMock(spec=ManagedProxySession)
+    first_creds = ProxyCredentials(
+        server="http://proxy:8080", username="user-first", password="pass"
+    )
+    second_creds = ProxyCredentials(
+        server="http://proxy:8080", username="user-second", password="pass"
+    )
+    proxy.acquire_credentials = AsyncMock(side_effect=[(first_creds, 0.0), (second_creds, 0.0)])
+    proxy.rotate = AsyncMock()
+    proxy.settings = ProxySettings(
+        enabled=True,
+        url="http://proxy:8080",
+        username_template="user-session-{session_id}",
+        password="pass",
+        rotate_after_requests=20,
+        domain_delay=0.0,
+        block_backoff=0.0,
+    )
+    with (
+        patch("crawl_tool.engine.crawler.AsyncWebCrawler") as mock_cls,
+        patch("crawl_tool.engine.crawler.asyncio.sleep"),
+    ):
+        mock_cls.return_value = _multi_crawler(_blocked_result(403), _crawl_result())
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+
+    assert result.success is True
+    proxy.rotate.assert_awaited_once_with("example.com", reason="http_403")
+    crawler = mock_cls.return_value
+    first_config = crawler.arun.await_args_list[0].kwargs["config"]
+    second_config = crawler.arun.await_args_list[1].kwargs["config"]
+    assert first_config.proxy_config.username == "user-first"
+    assert second_config.proxy_config.username == "user-second"
+
+
+@pytest.mark.asyncio
+async def test_blocked_proxy_retry_uses_next_proxy_pool_entry() -> None:
+    proxy = ManagedProxySession(
+        ProxySettings(
+            enabled=True,
+            url="",
+            username_template="",
+            password="",
+            rotate_after_requests=20,
+            domain_delay=0.0,
+            block_backoff=0.0,
+            proxy_pool=(
+                ProxyCredentials(
+                    server="http://proxy-a:8080", username="user-a", password="pass-a"
+                ),
+                ProxyCredentials(
+                    server="http://proxy-b:8080", username="user-b", password="pass-b"
+                ),
+            ),
+        )
+    )
+    with (
+        patch("crawl_tool.engine.crawler.AsyncWebCrawler") as mock_cls,
+        patch("crawl_tool.engine.crawler.asyncio.sleep"),
+    ):
+        mock_cls.return_value = _multi_crawler(_blocked_result(403), _crawl_result())
+        result = await fetch_page("https://example.com", proxy_session=proxy)
+
+    assert result.success is True
+    crawler = mock_cls.return_value
+    first_config = crawler.arun.await_args_list[0].kwargs["config"]
+    second_config = crawler.arun.await_args_list[1].kwargs["config"]
+    assert first_config.proxy_config.server == "http://proxy-a:8080"
+    assert second_config.proxy_config.server == "http://proxy-b:8080"
+
+
+@pytest.mark.asyncio
 async def test_second_block_after_rotation_returns_proxy_blocked() -> None:
     proxy = _make_proxy_session()
     with (
@@ -685,7 +752,9 @@ async def test_429_with_retry_after_rotates() -> None:
 @pytest.mark.asyncio
 async def test_captcha_triggers_rotation() -> None:
     proxy = _make_proxy_session()
-    captcha = _blocked_result(403, html='<div id="cf-challenge-running"></div>')
+    captcha = _blocked_result(
+        403, html="<html><body><h1>Pardon Our Interruption</h1></body></html>"
+    )
     with (
         patch("crawl_tool.engine.crawler.AsyncWebCrawler") as mock_cls,
         patch("crawl_tool.engine.crawler.asyncio.sleep"),

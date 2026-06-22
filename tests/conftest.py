@@ -21,3 +21,22 @@ os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 @pytest.fixture(autouse=True, scope="session")
 def setup_logging() -> None:
     configure_logging(verbose=True)
+
+
+_PROXY_ENV_VARS = (
+    "PROXY_URL",
+    "PROXY_USERNAME_TEMPLATE",
+    "PROXY_PASSWORD",
+    "PROXY_ROTATE_AFTER_REQUESTS",
+    "PROXY_DOMAIN_DELAY_SECONDS",
+    "PROXY_BLOCK_BACKOFF_SECONDS",
+    "PROXY_LIST_FILE",
+    "WEBSHARE_PROXY_LIST_FILE",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must opt in to proxy env vars rather than inherit them from .env."""
+    for name in _PROXY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)

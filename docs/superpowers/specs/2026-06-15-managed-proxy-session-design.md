@@ -6,6 +6,8 @@
 
 - Initial draft: full design covering module structure, call chain, retry policy, CAPTCHA detection, domain delay, and tests
 - Rev 2: atomic acquisition replaces get_credentials + record_request; separate transient/block retry counters; explicit no-proxy path; domain delay moved per-attempt; CAPTCHA signals narrowed; rotate accepts reason; session ID prefix terminology; doc header and code-fence language tags added
+- Rev 3 (2026-06-19): static proxy-pool backend added (`PROXY_LIST_FILE` / `WEBSHARE_PROXY_LIST_FILE`); `_DomainSession` gains `proxy_index`; `rotate` advances through the pool round-robin when a pool is configured; `PROXY_USERNAME_TEMPLATE` validated to require `{session_id}` when no pool is configured; test env isolation moved to an autouse fixture in `tests/conftest.py`
+- Rev 4 (2026-06-22): pool rotation migrated to Crawl4AI's native `RoundRobinProxyStrategy` — `_DomainSession.proxy_index` removed, `proxy_index` advancement replaced by `get_proxy_for_session(domain)` / `release_session(domain)`; CAPTCHA/block detection migrated to Crawl4AI's native `antibot_detector.is_blocked`, replacing the hardcoded 3-marker `_is_captcha_response`; `_is_blocked` and a new `_block_reason` keep the exact same boundary (403/429 always blocked, 5xx never blocked) but classify "captcha" vs plain status via native's much broader vendor-pattern library
 
 ---
 
@@ -46,15 +48,34 @@ execute()
 Reads environment variables once at construction. Immutable.
 
 ```python
-PROXY_URL                    # required — proxy disabled if absent
-PROXY_USERNAME_TEMPLATE      # e.g. "customer-name-session-{session_id}"
+PROXY_URL                    # single managed-provider proxy — disabled if absent and no pool
+PROXY_USERNAME_TEMPLATE      # e.g. "customer-name-session-{session_id}"; required when PROXY_URL is set and no pool is configured
 PROXY_PASSWORD
 PROXY_ROTATE_AFTER_REQUESTS  # default: 20
 PROXY_DOMAIN_DELAY_SECONDS   # default: 2
 PROXY_BLOCK_BACKOFF_SECONDS  # default: 30
+PROXY_LIST_FILE              # path to a static proxy-pool file
+WEBSHARE_PROXY_LIST_FILE     # alias for PROXY_LIST_FILE
 ```
 
-`enabled: bool` is `True` only when `PROXY_URL` is non-empty. All consumers check `enabled` before acting.
+`enabled: bool` is `True` when `PROXY_URL` is non-empty **or** a proxy pool is loaded. All consumers check `enabled` before acting.
+
+Two mutually exclusive backends, selected at `from_env()`:
+
+- **Managed-provider backend** — `PROXY_URL` set, no pool file. Credentials are generated per session by formatting `PROXY_USERNAME_TEMPLATE` with a UUID4 `session_id`, so the provider rotates the exit IP server-side. `from_env()` raises `ValueError` if `PROXY_URL` is set, no pool is configured, and `PROXY_USERNAME_TEMPLATE` does not contain `{session_id}` — a static username can never rotate under this backend.
+- **Static pool backend** — `PROXY_LIST_FILE` (or `WEBSHARE_PROXY_LIST_FILE`) set. `_load_proxy_pool()` reads the file once at construction into `proxy_pool: tuple[ProxyCredentials, ...]`. Rotation cycles through the pool round-robin instead of re-templating a username; the pool takes precedence over `PROXY_URL` when both are set.
+
+### `_load_proxy_pool()` / `_proxy_credentials_from_line()`
+
+`_load_proxy_pool() -> tuple[ProxyCredentials, ...]` reads `PROXY_LIST_FILE` or `WEBSHARE_PROXY_LIST_FILE`, returns `()` if neither is set, otherwise parses every non-blank line.
+
+`_proxy_credentials_from_line(line: str) -> ProxyCredentials` accepts three line formats:
+
+- `scheme://user:pass@host:port` or `user:pass@host:port` (defaults to `http://`)
+- `host:port:username:password` (4 colon-separated fields)
+- `host:port` (2 fields, no credentials)
+
+Any other field count raises `ValueError("unsupported proxy list line format")`.
 
 ### `ProxyCredentials`
 
@@ -66,6 +87,8 @@ Frozen dataclass. Fields: `server: str`, `username: str`, `password: str`.
 ### `_DomainSession` (internal)
 
 Dataclass: `session_id: str` (UUID4 hex), `request_count: int`, `last_request_at: float` (monotonic timestamp, updated on each `acquire_credentials` call).
+
+Pool position is no longer tracked here (Rev 4) — `ManagedProxySession` holds a `crawl4ai.RoundRobinProxyStrategy` instance when `settings.proxy_pool` is set, and asks it for the domain's current pool entry via `get_proxy_for_session(domain)`.
 
 ### `ManagedProxySession`
 
@@ -91,9 +114,8 @@ Single atomic operation. Under the lock:
 2. Computes `wait = max(0.0, settings.domain_delay - (monotonic() - last_request_at))` from the *previous* `last_request_at`.
 3. If `request_count >= settings.rotate_after_requests`, calls `_rotate_unlocked(domain, reason="threshold")`.
 4. Increments `request_count` and sets `last_request_at = monotonic()`.
-5. Returns `(ProxyCredentials | None, wait)`. Returns `(None, 0.0)` when not enabled.
-
-Username is constructed as `settings.username_template.format(session_id=session.session_id)`.
+5. If a pool strategy is configured, returns `(creds, wait)` where `creds` wraps the `crawl4ai.ProxyConfig` from `pool_strategy.get_proxy_for_session(domain)` (no TTL — sticky until explicitly rotated) back into our own `ProxyCredentials` so password redaction stays intact.
+6. Otherwise returns `(ProxyCredentials | None, wait)` built from `settings.username_template.format(session_id=session.session_id)`. Returns `(None, 0.0)` when not enabled.
 
 The caller sleeps `wait` seconds outside the lock before using the credentials.
 
@@ -103,7 +125,7 @@ async def rotate(domain: str, *, reason: str) -> None
 
 Acquires the lock and calls `_rotate_unlocked(domain, reason=reason)`. Used externally by `_fetch_with_retries` on a blocking response. Does not return credentials — the next `acquire_credentials` call creates the new session.
 
-`_rotate_unlocked(domain, reason)` generates a new UUID4 hex session ID, resets `request_count` to 0, and logs `domain`, `session_id[:8]` (prefix), `reason`, and previous `request_count`.
+`_rotate_unlocked(domain, reason)` generates a new UUID4 hex session ID, resets `request_count` to 0, and logs `domain`, `session_id[:8]` (prefix), `reason`, and previous `request_count`. When a pool strategy is configured, it also awaits `pool_strategy.release_session(domain)` first, so the next `get_proxy_for_session(domain)` call advances to the next pool entry round-robin; the managed-provider backend instead relies on the new session ID alone to get a new exit IP from the provider.
 
 ---
 
@@ -209,22 +231,19 @@ Unchanged from current `_fetch_with_retries` — existing 429 retry (with Retry-
 
 ---
 
-## CAPTCHA Detection
+## Block / CAPTCHA Detection (Rev 4 — migrated to Crawl4AI native)
 
-`_is_captcha_response(result: CrawlResult) -> bool` in `crawler.py`.
+`_is_blocked(result) -> bool` and `_block_reason(result) -> str` in `crawler.py`, both backed by `crawl4ai.antibot_detector.is_blocked(status_code, html, error_message)` instead of the original 3-marker hardcoded heuristic.
 
-**Strong markers — any one is sufficient:**
+**Boundary (unchanged from Rev 1–3):**
 
-- HTML contains `id="cf-challenge-running"`
-- HTML contains `class="cf-browser-verification"` or `class="cf-challenge-body"`
+- `status_code in (403, 429)` → always blocked.
+- `status_code >= 500` → never blocked (handled as transient, same-proxy retry).
+- Any other status → blocked only if the native detector's reason text matches a named vendor/challenge keyword (`_VENDOR_BLOCK_KEYWORDS`: cloudflare, akamai, perimeterx, datadome, imperva, incapsula, sucuri, kasada, captcha, challenge, network security). Generic near-empty-body and structural-integrity heuristics are deliberately **not** consulted outside 403/429 — they're calibrated for raw full-page HTML and would flag ordinary short 200 responses; this codebase already retries via a separate full-page fallback when scoped markdown is too short (see `fetch_page`).
 
-**Phrase + status — both required together:**
+**Reason tagging (`_block_reason`):** `"captcha"` when the native reason matches a vendor keyword, else `f"http_{status}"`. Both 403 and 429 still pass through native detection to decide the tag — e.g. a 403 with a matched Cloudflare/Akamai/etc. pattern tags `"captcha"`; a plain 403 with no pattern match tags `"http_403"`.
 
-- `result.status_code == 403` **and** title (lowercased) contains `"just a moment"` or `"verify you are human"`
-
-Signals not used as standalone classifiers: `data-sitekey`, CAPTCHA script/iframe `src`, bare `"access denied"` title. These appear on normal pages with embedded widgets and would produce false positives.
-
-A plain 403 that does not match any strong marker or the phrase+status pair is not classified as CAPTCHA. It enters the rotation branch as a plain block; the logged reason is `"http_403"` rather than `"captcha"`.
+Native's pattern library covers far more than the original 3 Cloudflare markers — Cloudflare (challenge-form token, error-code span, JS orchestrate path), Akamai (`Reference #`, "Pardon Our Interruption"), PerimeterX, DataDome, Imperva/Incapsula, Sucuri, and Kasada, plus a 3-tier severity model (structural markers → generic short-page terms → structural-integrity fallback) — see `crawl4ai/antibot_detector.py` for the full pattern set.
 
 ---
 
@@ -242,12 +261,14 @@ All variables are operator-only. None appear in `CrawlRequest`, `AgentConfig`, o
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROXY_URL` | — | Proxy server URL. Proxy disabled if absent. |
-| `PROXY_USERNAME_TEMPLATE` | `"user-session-{session_id}"` | Provider username pattern. |
-| `PROXY_PASSWORD` | — | Proxy password. |
+| `PROXY_URL` | — | Managed-provider proxy server URL. Ignored when a pool is configured. |
+| `PROXY_USERNAME_TEMPLATE` | `"user-session-{session_id}"` | Provider username pattern. Must contain `{session_id}` when `PROXY_URL` is set and no pool is configured. |
+| `PROXY_PASSWORD` | — | Managed-provider proxy password. |
 | `PROXY_ROTATE_AFTER_REQUESTS` | `20` | Rotate session after this many credentials issued. |
 | `PROXY_DOMAIN_DELAY_SECONDS` | `2` | Minimum seconds between requests to the same domain. |
 | `PROXY_BLOCK_BACKOFF_SECONDS` | `30` | Sleep after a blocking response before the rotation retry. |
+| `PROXY_LIST_FILE` | — | Path to a static proxy-pool file (`host:port:user:pass` lines). Takes precedence over `PROXY_URL`. |
+| `WEBSHARE_PROXY_LIST_FILE` | — | Alias for `PROXY_LIST_FILE`. |
 
 ---
 
@@ -271,9 +292,9 @@ All variables are operator-only. None appear in `CrawlRequest`, `AgentConfig`, o
 11. 403 + proxy → `rotate` called once with `reason="http_403"`, retry attempted
 12. Second block after rotation → `PageResult(success=False, error="proxy_blocked")`, no further rotation
 13. 429 with `Retry-After: 5` header → sleeps ~5 s, rotates with `reason="http_429"`
-14. CAPTCHA response (`id="cf-challenge-running"` in HTML) → `rotate` called with `reason="captcha"`
-15. `data-sitekey` alone → `_is_captcha_response` returns `False`, enters plain-403 rotation path
-16. Plain 403 without strong CAPTCHA marker → rotation triggered, `_is_captcha_response` returns `False`
+14. Vendor challenge page (e.g. "Pardon Our Interruption") → `rotate` called with `reason="captcha"`
+15. `data-sitekey` alone → `_block_reason` returns `"http_403"`, not `"captcha"` (no vendor pattern match)
+16. Plain 403 without a vendor signature → rotation triggered, `_block_reason` returns `"http_403"`
 17. 5xx → transient exponential backoff, `rotate` never called
 18. Exception on `arun` → transient retry counter incremented, `rotate` never called
 19. Block rotation does not consume transient retry budget (5xx + 403 sequence still gets both retries)
@@ -284,15 +305,41 @@ All variables are operator-only. None appear in `CrawlRequest`, `AgentConfig`, o
 
 22. Direct-fetch and agent paths receive the same `ManagedProxySession` instance from `execute()`
 
+### `tests/test_proxy.py` — pool backend (extend)
+
+23. `ProxySettings.from_env()` with `PROXY_URL` set, no pool, and a static `PROXY_USERNAME_TEMPLATE` → raises `ValueError`
+24. `ProxySettings.from_env()` with `PROXY_LIST_FILE` pointing at a `host:port:user:pass` file → `enabled=True`, `proxy_pool` populated, entries parsed correctly
+25. `rotate(domain, reason=...)` with a pool configured → the next `acquire_credentials` returns the next pool entry's `server`, wrapping back to the first entry after the pool is exhausted (`RoundRobinProxyStrategy` round-trip)
+
+### `tests/test_crawler_fetch_page.py` — pool backend (extend)
+
+26. Blocked response + pool configured → retry uses the next pool entry's credentials, not a re-templated username
+
+### `tests/conftest.py`
+
+27. Autouse fixture clears all `PROXY_*` / `WEBSHARE_*` env vars before each test, so local `.env` proxy configuration never leaks into test runs — tests opt in via `monkeypatch.setenv`
+
 ---
 
-## Crawl4AI Fields Left Unset
+## Crawl4AI Native Integration (Rev 4)
+
+`ManagedProxySession` now uses two pieces of Crawl4AI's native anti-bot/proxy surface directly, rather than reimplementing them:
+
+- `crawl4ai.RoundRobinProxyStrategy` — owns pool-position tracking for the static-pool backend (`get_proxy_for_session(domain)` / `release_session(domain)`), replacing the hand-rolled `proxy_index` counter.
+- `crawl4ai.antibot_detector.is_blocked` — backs `_is_blocked`/`_block_reason` in `crawler.py`, replacing the 3-marker hardcoded CAPTCHA heuristic.
+
+Still not used, by design:
 
 ```python
-proxy_rotation_strategy    = None
+proxy_rotation_strategy    = None  # set on CrawlerRunConfig — we call get_proxy_for_session ourselves instead, since
+                                    # ManagedProxySession needs to layer domain pacing and the rotate-after-N threshold
+                                    # on top, which CrawlerRunConfig's own rotation hook doesn't support
 proxy_session_id           = None
 proxy_session_ttl          = None
 proxy_session_auto_release = False
+max_retries (native)       = 0     # native's retry loop has no backoff/pacing between attempts; our own
+                                    # _fetch_managed_proxy loop owns backoff, Retry-After handling, and the
+                                    # separate transient-vs-block retry budgets
 ```
 
-A future static proxy-pool backend could use Crawl4AI's native rotation strategy. The current managed-provider backend injects one dynamically generated `ProxyConfig` per attempt via `acquire_credentials`.
+`ManagedProxySession` still owns rotation end-to-end for both backends — it injects one `ProxyConfig`-derived `ProxyCredentials` per attempt via `acquire_credentials`, using native primitives only for the parts that have no pacing/backoff requirement (pool position, anti-bot pattern matching).

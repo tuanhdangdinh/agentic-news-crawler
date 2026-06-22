@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import os
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlparse
 
+import httpx
 import pytest
 
 from crawl_tool.engine.agent import AgentConfig, run_agent
@@ -26,6 +28,13 @@ from crawl_tool.engine.prompt_parser import parse_crawl_prompt
 requires_anthropic_key = pytest.mark.skipif(
     not os.getenv("ANTHROPIC_API_KEY"),
     reason="ANTHROPIC_API_KEY is required for agent integration tests",
+)
+requires_webshare_proxy_list = pytest.mark.skipif(
+    not (os.getenv("WEBSHARE_PROXY_LIST_URL") or os.getenv("WEBSHARE_PROXY_LIST_FILE")),
+    reason=(
+        "WEBSHARE_PROXY_LIST_URL or WEBSHARE_PROXY_LIST_FILE is required "
+        "for proxy list integration tests"
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -178,6 +187,75 @@ async def test_date_filter_excludes_articles_outside_range():
 def _normalized_host(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
     return host.removeprefix("www.")
+
+
+def _proxy_url_from_webshare_line(line: str) -> str:
+    fields = line.strip().split(":")
+    if "@" in line:
+        return line if "://" in line else f"http://{line}"
+    if len(fields) == 4:
+        host, port, username, password = fields
+        return f"http://{username}:{password}@{host}:{port}"
+    if len(fields) == 2:
+        host, port = fields
+        return f"http://{host}:{port}"
+    raise ValueError("unsupported Webshare proxy line format")
+
+
+async def _fetch_public_ip(proxy_url: str) -> str:
+    async with httpx.AsyncClient(proxy=proxy_url, timeout=20.0, trust_env=False) as client:
+        response = await client.get("https://ipv4.webshare.io/")
+        response.raise_for_status()
+        return response.text.strip()
+
+
+async def _load_webshare_proxy_lines() -> list[str]:
+    list_file = os.getenv("WEBSHARE_PROXY_LIST_FILE")
+    if list_file:
+        return [
+            line.strip()
+            for line in Path(list_file).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    list_url = os.environ["WEBSHARE_PROXY_LIST_URL"]
+    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+        response = await client.get(list_url)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            pytest.fail(f"proxy list download failed with HTTP {exc.response.status_code}")
+    return [line.strip() for line in response.text.splitlines() if line.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Proxy integration — Webshare list has rotating exit IPs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@requires_webshare_proxy_list
+async def test_webshare_proxy_list_rotates_public_ip():
+    """Downloaded Webshare proxy list exposes at least two distinct public IPs."""
+    proxy_urls = [
+        _proxy_url_from_webshare_line(line) for line in await _load_webshare_proxy_lines()
+    ][:5]
+    assert len(proxy_urls) >= 2, "proxy list must contain at least two entries"
+
+    observed_ips = []
+    failures = 0
+    for proxy_url in proxy_urls:
+        try:
+            observed_ips.append(await _fetch_public_ip(proxy_url))
+        except httpx.HTTPError:
+            failures += 1
+
+    assert len(observed_ips) >= 2, (
+        f"need at least two successful proxy observations, got {len(observed_ips)} "
+        f"successes and {failures} failures"
+    )
+    assert len(set(observed_ips)) >= 2, f"proxy list did not rotate IPs: {observed_ips}"
 
 
 # ---------------------------------------------------------------------------

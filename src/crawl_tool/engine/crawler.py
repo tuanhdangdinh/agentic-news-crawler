@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import structlog
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
+from crawl4ai.antibot_detector import is_blocked as _antibot_is_blocked
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
@@ -286,28 +287,52 @@ def _retry_after(result) -> float:
             return 60.0
 
 
-def _is_captcha_response(result) -> bool:
-    """Return True only when strong challenge signals are present."""
-    html = result.html or ""
-    if (
-        'id="cf-challenge-running"' in html
-        or "cf-browser-verification" in html
-        or "cf-challenge-body" in html
-    ):
-        return True
-    status = result.status_code or 0
-    if status == 403:
-        metadata = result.metadata or {}
-        title = (metadata.get("title") or "").lower()
-        if "just a moment" in title or "verify you are human" in title:
-            return True
-    return False
+# Substrings in Crawl4AI's antibot_detector reason text that indicate a named
+# anti-bot vendor or challenge page, as opposed to a plain status-code block.
+_VENDOR_BLOCK_KEYWORDS = (
+    "cloudflare",
+    "akamai",
+    "perimeterx",
+    "datadome",
+    "imperva",
+    "incapsula",
+    "sucuri",
+    "kasada",
+    "captcha",
+    "challenge",
+    "network security",
+)
 
 
 def _is_blocked(result) -> bool:
-    """Return True for 403, 429, or a detected CAPTCHA challenge."""
+    """Return True for HTTP 403/429, or a named anti-bot vendor/challenge
+    signature detected by Crawl4AI's antibot_detector at any other status.
+
+    5xx is deliberately excluded — it is handled as a transient error with
+    same-proxy retry, never as a rotation-worthy block. Generic heuristics
+    (near-empty body, missing structural markers) are deliberately not
+    consulted outside 403/429 — they're calibrated for raw full-page HTML and
+    would flag ordinary short or stubbed 200 responses; this codebase already
+    handles unusably short scoped content via a separate full-page retry.
+    """
     status = result.status_code or 0
-    return status in (403, 429) or _is_captcha_response(result)
+    if status in (403, 429):
+        return True
+    if status >= 500:
+        return False
+    _, native_reason = _antibot_is_blocked(status, result.html or "", result.error_message)
+    return any(keyword in native_reason.lower() for keyword in _VENDOR_BLOCK_KEYWORDS)
+
+
+def _block_reason(result) -> str:
+    """Classify a block for logging and rotation tracking. "" when not blocked."""
+    status = result.status_code or 0
+    if not _is_blocked(result):
+        return ""
+    _, native_reason = _antibot_is_blocked(status, result.html or "", result.error_message)
+    if any(keyword in native_reason.lower() for keyword in _VENDOR_BLOCK_KEYWORDS):
+        return "captcha"
+    return f"http_{status}" if status else "blocked"
 
 
 def _build_success_result(url: str, result, fetch_time: float) -> PageResult:
@@ -404,7 +429,7 @@ async def _fetch_managed_proxy(
                     success=False,
                     error="proxy_blocked",
                 )
-            reason = "captcha" if _is_captcha_response(result) else f"http_{status}"
+            reason = _block_reason(result)
             logger.warning("fetch blocked, rotating", url=url, status=status, reason=reason)
             await proxy_session.rotate(domain, reason=reason)
             backoff = (

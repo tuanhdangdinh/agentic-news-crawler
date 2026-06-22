@@ -52,6 +52,7 @@ Thumbs.db
 .env
 .env.*
 secrets.toml
+docs/Webshare*.txt
 
 docs/Review_Report.md
 docs/week1_library_research_codex.md
