@@ -17,7 +17,7 @@ from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawl_tool.engine.models import PageResult
-from crawl_tool.engine.proxy import ManagedProxySession
+from crawl_tool.engine.proxy import ProxyRotator
 
 logger = structlog.get_logger(__name__)
 
@@ -130,7 +130,7 @@ _BYLINE_SELECTORS = [
 ]
 
 _MIN_SCOPED_MARKDOWN_CHARS = 200
-_MAX_PROXY_TRANSIENT_RETRIES = 3
+_DEFAULT_FETCH_ATTEMPTS = 4
 
 
 def article_selector_for_url(url: str) -> str | None:
@@ -375,150 +375,98 @@ def _build_success_result(url: str, result, fetch_time: float) -> PageResult:
     )
 
 
-async def _fetch_managed_proxy(
-    url: str, cfg: CrawlerRunConfig, proxy_session: ManagedProxySession
-) -> PageResult:
-    """Fetch with proxy — independent transient and block rotation counters."""
-    domain = urlparse(url).netloc.removeprefix("www.")
-    transient_retries = 0
-    block_rotations = 0
+def _failure_result(url: str, status_code: int | None, fetch_time: float, error: str) -> PageResult:
+    return PageResult(
+        url=url,
+        final_url=url,
+        status_code=status_code,
+        title=None,
+        markdown="",
+        fetch_time=fetch_time,
+        success=False,
+        error=error,
+    )
 
-    while True:
-        t0 = time.monotonic()
-        creds, wait = await proxy_session.acquire_credentials(domain)
-        if wait > 0:
-            await asyncio.sleep(wait)
 
-        cfg_for_attempt = cfg.clone(proxy_config=creds.to_dict()) if creds else cfg
-        try:
-            async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
-                result = await crawler.arun(url=url, config=cfg_for_attempt)
-            fetch_time = round(time.monotonic() - t0, 2)
-        except Exception as exc:  # noqa: BLE001
-            fetch_time = round(time.monotonic() - t0, 2)
-            if transient_retries < _MAX_PROXY_TRANSIENT_RETRIES:
-                transient_retries += 1
-                backoff = 2**transient_retries
-                logger.warning("fetch exception retrying", url=url, exc=str(exc), backoff=backoff)
-                await asyncio.sleep(backoff)
-                continue
-            logger.warning("fetch exception", url=url, exc=str(exc))
-            return PageResult(
-                url=url,
-                final_url=url,
-                status_code=None,
-                title=None,
-                markdown="",
-                fetch_time=fetch_time,
-                success=False,
-                error=str(exc),
-            )
-
-        status = result.status_code or 0
-
-        if _is_blocked(result):
-            if block_rotations >= 1:
-                logger.warning("proxy blocked after rotation", url=url, status=status)
-                return PageResult(
-                    url=url,
-                    final_url=url,
-                    status_code=status,
-                    title=None,
-                    markdown="",
-                    fetch_time=fetch_time,
-                    success=False,
-                    error="proxy_blocked",
-                )
-            reason = _block_reason(result)
-            logger.warning("fetch blocked, rotating", url=url, status=status, reason=reason)
-            await proxy_session.rotate(domain, reason=reason)
-            backoff = (
-                _retry_after(result) if status == 429 else proxy_session.settings.block_backoff
-            )
-            await asyncio.sleep(backoff)
-            block_rotations += 1
-            continue
-
-        if status >= 500:
-            if transient_retries < _MAX_PROXY_TRANSIENT_RETRIES:
-                transient_retries += 1
-                backoff = 2**transient_retries
-                logger.warning("fetch error retrying", status=status, url=url, backoff=backoff)
-                await asyncio.sleep(backoff)
-                continue
-            logger.warning("fetch failed", url=url, status=status)
-            return PageResult(
-                url=url,
-                final_url=url,
-                status_code=status,
-                title=None,
-                markdown="",
-                fetch_time=fetch_time,
-                success=False,
-                error=f"HTTP {status}",
-            )
-
-        if not result.success:
-            error = result.error_message or f"HTTP {status}"
-            logger.warning("fetch failed", url=url, status=status, error=error)
-            return PageResult(
-                url=url,
-                final_url=url,
-                status_code=status,
-                title=None,
-                markdown="",
-                fetch_time=fetch_time,
-                success=False,
-                error=error,
-            )
-
-        return _build_success_result(url, result, fetch_time)
+def _max_attempts(proxy_rotator: ProxyRotator | None) -> int:
+    if proxy_rotator is None:
+        return _DEFAULT_FETCH_ATTEMPTS
+    # Never drop below the default transient-retry budget — a small pool would
+    # otherwise starve plain 5xx/exception retries that have nothing to do with
+    # proxy blocking (e.g. a 2-proxy pool giving only 2 total attempts).
+    return max(len(proxy_rotator.settings.proxy_pool), _DEFAULT_FETCH_ATTEMPTS)
 
 
 async def _fetch_with_retries(
     url: str,
     cfg: CrawlerRunConfig,
     *,
-    proxy_session: ManagedProxySession | None = None,
+    proxy_rotator: ProxyRotator | None = None,
 ) -> PageResult:
-    """Run a single fetch with up to 3 retries on 5xx / exception."""
-    if proxy_session is not None:
-        return await _fetch_managed_proxy(url, cfg, proxy_session)
-    max_retries = 3
-    for attempt in range(max_retries + 1):
+    """Run a single fetch with retry handling.
+
+    Args:
+        url: URL to fetch.
+        cfg: Crawl4AI run configuration for the request.
+        proxy_rotator: Optional proxy rotator that provides new credentials per attempt.
+
+    Returns:
+        Successful page data, or a failure result with the final error.
+    """
+    domain = urlparse(url).netloc.removeprefix("www.")
+    max_attempts = _max_attempts(proxy_rotator)
+    for attempt in range(max_attempts):
         t0 = time.monotonic()
         try:
+            # Proxy mode rotates credentials before every Crawl4AI request.
+            if proxy_rotator is not None:
+                creds, wait = await proxy_rotator.next_credentials(domain)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                cfg_for_attempt = cfg.clone(proxy_config=creds.to_dict()) if creds else cfg
+            else:
+                cfg_for_attempt = cfg
+
             async with AsyncWebCrawler(config=_BROWSER_CFG) as crawler:
-                result = await crawler.arun(url=url, config=cfg)
+                result = await crawler.arun(url=url, config=cfg_for_attempt)
             fetch_time = round(time.monotonic() - t0, 2)
 
             status = result.status_code or 0
+            # Only proxy-block signals consume the proxy pool and end as proxy_blocked.
+            if proxy_rotator is not None and _is_blocked(result):
+                reason = _block_reason(result)
+                logger.warning(
+                    "fetch blocked, retrying next proxy",
+                    url=url,
+                    status=status,
+                    reason=reason,
+                    attempt=attempt + 1,
+                )
+                if attempt + 1 < max_attempts:
+                    backoff = (
+                        _retry_after(result)
+                        if status == 429
+                        else proxy_rotator.settings.block_backoff
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.warning("proxy blocked after all attempts", url=url, status=status)
+                return _failure_result(url, status, fetch_time, "proxy_blocked")
+
+            # Non-block HTTP failures keep their original HTTP/error classification.
             if not result.success or status >= 400:
                 error = result.error_message or f"HTTP {status}"
 
                 if status == 429:
-                    resp_hdrs = getattr(result, "response_headers", {}) or {}
-                    raw_retry_after = (
-                        resp_hdrs.get("retry-after") or resp_hdrs.get("Retry-After") or "60"
-                    )
-                    try:
-                        retry_after = max(int(raw_retry_after), 0)
-                    except ValueError:
-                        try:
-                            retry_at = parsedate_to_datetime(raw_retry_after)
-                            if retry_at.tzinfo is None:
-                                retry_at = retry_at.replace(tzinfo=UTC)
-                            retry_after = max((retry_at - datetime.now(UTC)).total_seconds(), 0)
-                        except (TypeError, ValueError, OverflowError):
-                            retry_after = 60
+                    retry_after = _retry_after(result)
                     logger.warning(
                         "fetch 429", url=url, retry_after=retry_after, attempt=attempt + 1
                     )
-                    if attempt < max_retries:
+                    if attempt + 1 < max_attempts:
                         await asyncio.sleep(retry_after)
                         continue
 
-                if status >= 500 and attempt < max_retries:
+                if status >= 500 and attempt + 1 < max_attempts:
                     backoff = 2**attempt
                     logger.warning(
                         "fetch error retrying",
@@ -531,37 +479,19 @@ async def _fetch_with_retries(
                     continue
 
                 logger.warning("fetch failed", url=url, status=result.status_code, error=error)
-                return PageResult(
-                    url=url,
-                    final_url=url,
-                    status_code=result.status_code,
-                    title=None,
-                    markdown="",
-                    fetch_time=fetch_time,
-                    success=False,
-                    error=error,
-                )
+                return _failure_result(url, result.status_code, fetch_time, error)
 
             return _build_success_result(url, result, fetch_time)
 
         except Exception as exc:  # noqa: BLE001
             fetch_time = round(time.monotonic() - t0, 2)
-            if attempt < max_retries:
+            if attempt + 1 < max_attempts:
                 backoff = 2**attempt
                 logger.warning("fetch exception retrying", url=url, exc=str(exc), backoff=backoff)
                 await asyncio.sleep(backoff)
                 continue
             logger.warning("fetch exception", url=url, exc=str(exc))
-            return PageResult(
-                url=url,
-                final_url=url,
-                status_code=None,
-                title=None,
-                markdown="",
-                fetch_time=fetch_time,
-                success=False,
-                error=str(exc),
-            )
+            return _failure_result(url, None, fetch_time, str(exc))
 
 
 async def fetch_page(
@@ -569,7 +499,7 @@ async def fetch_page(
     css_selector: str | None = None,
     *,
     article_body: bool = True,
-    proxy_session: ManagedProxySession | None = None,
+    proxy_rotator: ProxyRotator | None = None,
 ) -> PageResult:
     """Fetch a single URL and return a normalised PageResult.
 
@@ -582,8 +512,8 @@ async def fetch_page(
             article selector is auto-detected and applied as target_elements —
             scoping only the markdown so head metadata (title, date) and full-page
             links survive. Pass article_body=False to always fetch the full page.
-        proxy_session: Optional managed proxy session. When provided, routing and
-            rotation are handled by _fetch_managed_proxy.
+        proxy_rotator: Optional proxy rotator. When provided, a new credential is
+            selected for each request attempt.
 
     Returns:
         PageResult with markdown, links, and metadata. Never raises — failures
@@ -599,7 +529,7 @@ async def fetch_page(
 
     logger.debug("fetch start", url=url, css_selector=css_selector, target_elements=target_elements)
     page = await _fetch_with_retries(
-        url, _make_cfg(css_selector, target_elements), proxy_session=proxy_session
+        url, _make_cfg(css_selector, target_elements), proxy_rotator=proxy_rotator
     )
 
     if (
@@ -608,6 +538,6 @@ async def fetch_page(
         and not _has_usable_scoped_markdown(page.markdown)
     ):
         logger.warning("scoped fetch returned unusable markdown, retrying full page", url=url)
-        page = await _fetch_with_retries(url, _RUN_CFG, proxy_session=proxy_session)
+        page = await _fetch_with_retries(url, _RUN_CFG, proxy_rotator=proxy_rotator)
 
     return page

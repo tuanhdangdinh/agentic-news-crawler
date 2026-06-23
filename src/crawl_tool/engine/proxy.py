@@ -1,4 +1,4 @@
-"""Job-scoped proxy session manager for username-encoded sticky sessions."""
+"""Job-scoped proxy credential rotator."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from uuid import uuid4
 import structlog
 from crawl4ai import ProxyConfig, RoundRobinProxyStrategy
 
-_log = structlog.get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,6 @@ class ProxySettings:
     url: str
     username_template: str
     password: str
-    rotate_after_requests: int
     domain_delay: float
     block_backoff: float
     proxy_pool: tuple[ProxyCredentials, ...] = ()
@@ -61,7 +60,6 @@ class ProxySettings:
             url=url,
             username_template=username_template,
             password=os.environ.get("PROXY_PASSWORD", ""),
-            rotate_after_requests=int(os.environ.get("PROXY_ROTATE_AFTER_REQUESTS", "20")),
             domain_delay=float(os.environ.get("PROXY_DOMAIN_DELAY_SECONDS", "2")),
             block_backoff=float(os.environ.get("PROXY_BLOCK_BACKOFF_SECONDS", "30")),
             proxy_pool=proxy_pool,
@@ -71,7 +69,6 @@ class ProxySettings:
         return (
             f"ProxySettings(enabled={self.enabled!r}, url={self.url!r}, "
             f"username_template={self.username_template!r}, password='***', "
-            f"rotate_after_requests={self.rotate_after_requests!r}, "
             f"domain_delay={self.domain_delay!r}, block_backoff={self.block_backoff!r})"
         )
 
@@ -114,26 +111,19 @@ def _proxy_credentials_from_line(line: str) -> ProxyCredentials:
     raise ValueError("unsupported proxy list line format")
 
 
-@dataclass
-class _DomainSession:
-    session_id: str
-    request_count: int
-    last_request_at: float
-
-
-class ManagedProxySession:
-    """Job-scoped sticky proxy session manager keyed on normalised domain.
+class ProxyRotator:
+    """Job-scoped proxy credential rotator keyed on normalised domain.
 
     Pool-backend rotation (when ``settings.proxy_pool`` is set) delegates to
-    Crawl4AI's ``RoundRobinProxyStrategy``, using the domain as the strategy's
-    session_id. Domain pacing, the request-count rotation threshold, and the
-    managed-provider username-templating backend have no native equivalent and
-    stay implemented here.
+    Crawl4AI's ``RoundRobinProxyStrategy.get_next_proxy()`` — a single shared
+    cycle across the whole job, not scoped per domain. Domain pacing and
+    managed-provider username templating have no native equivalent and stay
+    implemented here.
     """
 
     def __init__(self, settings: ProxySettings) -> None:
         self._settings = settings
-        self._sessions: dict[str, _DomainSession] = {}
+        self._last_request_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._pool_strategy: RoundRobinProxyStrategy | None = None
         if settings.proxy_pool:
@@ -148,35 +138,40 @@ class ManagedProxySession:
     def settings(self) -> ProxySettings:
         return self._settings
 
-    async def acquire_credentials(self, domain: str) -> tuple[ProxyCredentials | None, float]:
-        """Atomically issue credentials for domain, computing delay from previous request.
+    async def next_credentials(self, domain: str) -> tuple[ProxyCredentials | None, float]:
+        """Issue the next proxy credentials for a domain.
+
+        Args:
+            domain: Normalized domain used for per-domain pacing. Pool rotation
+                itself is a single shared cycle across the whole job.
 
         Returns:
-            (credentials, seconds_to_wait). credentials is None when proxy is disabled.
-            Caller must sleep seconds_to_wait before using the credentials.
+            Credentials and seconds to wait before use. Credentials are None when
+            proxy routing is disabled.
         """
         if not self._settings.enabled:
             return None, 0.0
 
         async with self._lock:
             now = monotonic()
-            ds = self._sessions.get(domain)
+            last_request_at = self._last_request_at.get(domain)
 
-            if ds is None:
+            if last_request_at is None:
                 wait = 0.0
-                ds = _DomainSession(session_id=uuid4().hex, request_count=0, last_request_at=0.0)
-                self._sessions[domain] = ds
             else:
-                wait = max(0.0, self._settings.domain_delay - (now - ds.last_request_at))
-                if ds.request_count >= self._settings.rotate_after_requests:
-                    await self._rotate_unlocked(domain, reason="threshold")
-                    ds = self._sessions[domain]
-
-            ds.request_count += 1
-            ds.last_request_at = monotonic()
+                # Keep per-domain pacing even though credentials rotate on every request.
+                wait = max(0.0, self._settings.domain_delay - (now - last_request_at))
 
             if self._pool_strategy is not None:
-                pool_proxy = await self._pool_strategy.get_proxy_for_session(domain)
+                pool_proxy = await self._pool_strategy.get_next_proxy()
+                self._last_request_at[domain] = monotonic()
+                logger.debug(
+                    "proxy credentials issued",
+                    domain=domain,
+                    backend="pool",
+                    server=pool_proxy.server,
+                    wait=round(wait, 2),
+                )
                 return (
                     ProxyCredentials(
                         server=pool_proxy.server,
@@ -186,7 +181,15 @@ class ManagedProxySession:
                     wait,
                 )
 
-            username = self._settings.username_template.format(session_id=ds.session_id)
+            # Templated providers rotate by embedding a fresh session id in the username.
+            self._last_request_at[domain] = monotonic()
+            username = self._settings.username_template.format(session_id=uuid4().hex)
+            logger.debug(
+                "proxy credentials issued",
+                domain=domain,
+                backend="templated",
+                wait=round(wait, 2),
+            )
             return (
                 ProxyCredentials(
                     server=self._settings.url,
@@ -195,26 +198,3 @@ class ManagedProxySession:
                 ),
                 wait,
             )
-
-    async def _rotate_unlocked(self, domain: str, reason: str) -> None:
-        """Replace the current domain session. Caller must hold _lock."""
-        old = self._sessions.get(domain)
-        old_count = old.request_count if old else 0
-        old_prefix = old.session_id[:8] if old else "none"
-        if self._pool_strategy is not None:
-            await self._pool_strategy.release_session(domain)
-        new_session = _DomainSession(session_id=uuid4().hex, request_count=0, last_request_at=0.0)
-        self._sessions[domain] = new_session
-        _log.info(
-            "proxy session rotated",
-            domain=domain,
-            reason=reason,
-            old_session_prefix=old_prefix,
-            new_session_prefix=new_session.session_id[:8],
-            requests_on_old=old_count,
-        )
-
-    async def rotate(self, domain: str, *, reason: str) -> None:
-        """Retire the current session for domain. Next acquire_credentials creates a new one."""
-        async with self._lock:
-            await self._rotate_unlocked(domain, reason=reason)

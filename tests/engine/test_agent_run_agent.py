@@ -504,7 +504,7 @@ async def test_run_agent_passes_css_selector_to_fetch_page():
         mock_client.messages.create = AsyncMock(return_value=_finish_response())
         await run_agent("https://cafef.vn", config)
     mock_fetch.assert_called_once_with(
-        "https://cafef.vn", css_selector="article.main", proxy_session=None
+        "https://cafef.vn", css_selector="article.main", proxy_rotator=None
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from crawl_tool.engine.proxy import ManagedProxySession, ProxyCredentials, ProxySettings
+from crawl_tool.engine.proxy import ProxyCredentials, ProxyRotator, ProxySettings
 
 
 def test_proxy_settings_disabled_when_url_absent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -19,7 +19,6 @@ def test_proxy_settings_enabled_when_url_present(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("PROXY_URL", "http://proxy.example.com:8080")
     monkeypatch.setenv("PROXY_PASSWORD", "secret")
     monkeypatch.delenv("PROXY_USERNAME_TEMPLATE", raising=False)
-    monkeypatch.delenv("PROXY_ROTATE_AFTER_REQUESTS", raising=False)
     monkeypatch.delenv("PROXY_DOMAIN_DELAY_SECONDS", raising=False)
     monkeypatch.delenv("PROXY_BLOCK_BACKOFF_SECONDS", raising=False)
     settings = ProxySettings.from_env()
@@ -27,7 +26,6 @@ def test_proxy_settings_enabled_when_url_present(monkeypatch: pytest.MonkeyPatch
     assert settings.url == "http://proxy.example.com:8080"
     assert settings.password == "secret"
     assert settings.username_template == "user-session-{session_id}"
-    assert settings.rotate_after_requests == 20
     assert settings.domain_delay == 2.0
     assert settings.block_backoff == 30.0
 
@@ -89,26 +87,25 @@ def proxy_settings() -> ProxySettings:
         url="http://proxy.example.com:8080",
         username_template="user-session-{session_id}",
         password="testpass",
-        rotate_after_requests=20,
         domain_delay=2.0,
         block_backoff=30.0,
     )
 
 
-async def test_acquire_credentials_disabled_returns_none(
+async def test_next_credentials_disabled_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("PROXY_URL", raising=False)
     settings = ProxySettings.from_env()
-    session = ManagedProxySession(settings)
-    creds, wait = await session.acquire_credentials("example.com")
+    rotator = ProxyRotator(settings)
+    creds, wait = await rotator.next_credentials("example.com")
     assert creds is None
     assert wait == 0.0
 
 
-async def test_acquire_credentials_first_visit(proxy_settings: ProxySettings) -> None:
-    session = ManagedProxySession(proxy_settings)
-    creds, wait = await session.acquire_credentials("example.com")
+async def test_next_credentials_first_visit(proxy_settings: ProxySettings) -> None:
+    rotator = ProxyRotator(proxy_settings)
+    creds, wait = await rotator.next_credentials("example.com")
     assert isinstance(creds, ProxyCredentials)
     assert wait == 0.0
     assert creds.server == "http://proxy.example.com:8080"
@@ -116,48 +113,38 @@ async def test_acquire_credentials_first_visit(proxy_settings: ProxySettings) ->
     assert len(creds.username.split("-")[-1]) == 32  # UUID4 hex suffix
 
 
-async def test_acquire_credentials_sticky_same_domain(proxy_settings: ProxySettings) -> None:
-    session = ManagedProxySession(proxy_settings)
-    creds1, _ = await session.acquire_credentials("example.com")
-    creds2, _ = await session.acquire_credentials("example.com")
+async def test_next_credentials_rotates_same_domain(proxy_settings: ProxySettings) -> None:
+    rotator = ProxyRotator(proxy_settings)
+    creds1, _ = await rotator.next_credentials("example.com")
+    creds2, _ = await rotator.next_credentials("example.com")
     assert creds1 is not None and creds2 is not None
-    assert creds1.username == creds2.username
+    assert creds1.username != creds2.username
 
 
-async def test_acquire_credentials_separate_sessions_per_domain(
+async def test_next_credentials_separate_domains_get_distinct_credentials(
     proxy_settings: ProxySettings,
 ) -> None:
-    session = ManagedProxySession(proxy_settings)
-    creds_a, _ = await session.acquire_credentials("site-a.com")
-    creds_b, _ = await session.acquire_credentials("site-b.com")
+    rotator = ProxyRotator(proxy_settings)
+    creds_a, _ = await rotator.next_credentials("site-a.com")
+    creds_b, _ = await rotator.next_credentials("site-b.com")
     assert creds_a is not None and creds_b is not None
     assert creds_a.username != creds_b.username
 
 
-async def test_acquire_credentials_domain_delay(proxy_settings: ProxySettings) -> None:
-    session = ManagedProxySession(proxy_settings)
-    _, wait1 = await session.acquire_credentials("example.com")
-    _, wait2 = await session.acquire_credentials("example.com")
+async def test_next_credentials_domain_delay(proxy_settings: ProxySettings) -> None:
+    rotator = ProxyRotator(proxy_settings)
+    _, wait1 = await rotator.next_credentials("example.com")
+    _, wait2 = await rotator.next_credentials("example.com")
     assert wait1 == 0.0
     assert wait2 > 0.0
 
 
-async def test_rotate_creates_new_session_id(proxy_settings: ProxySettings) -> None:
-    session = ManagedProxySession(proxy_settings)
-    creds_before, _ = await session.acquire_credentials("example.com")
-    await session.rotate("example.com", reason="test")
-    creds_after, _ = await session.acquire_credentials("example.com")
-    assert creds_before is not None and creds_after is not None
-    assert creds_before.username != creds_after.username
-
-
-async def test_rotate_advances_proxy_pool_entry() -> None:
+async def test_next_credentials_advances_proxy_pool_entry() -> None:
     settings = ProxySettings(
         enabled=True,
         url="",
         username_template="",
         password="",
-        rotate_after_requests=20,
         domain_delay=0.0,
         block_backoff=0.0,
         proxy_pool=(
@@ -165,24 +152,22 @@ async def test_rotate_advances_proxy_pool_entry() -> None:
             ProxyCredentials(server="http://proxy-b:8080", username="user-b", password="pass-b"),
         ),
     )
-    session = ManagedProxySession(settings)
+    rotator = ProxyRotator(settings)
 
-    creds_before, _ = await session.acquire_credentials("example.com")
-    await session.rotate("example.com", reason="test")
-    creds_after, _ = await session.acquire_credentials("example.com")
+    creds_before, _ = await rotator.next_credentials("example.com")
+    creds_after, _ = await rotator.next_credentials("example.com")
 
     assert creds_before is not None and creds_after is not None
     assert creds_before.server == "http://proxy-a:8080"
     assert creds_after.server == "http://proxy-b:8080"
 
 
-async def test_rotate_wraps_around_proxy_pool() -> None:
+async def test_next_credentials_wraps_around_proxy_pool() -> None:
     settings = ProxySettings(
         enabled=True,
         url="",
         username_template="",
         password="",
-        rotate_after_requests=20,
         domain_delay=0.0,
         block_backoff=0.0,
         proxy_pool=(
@@ -190,14 +175,13 @@ async def test_rotate_wraps_around_proxy_pool() -> None:
             ProxyCredentials(server="http://proxy-b:8080", username="user-b", password="pass-b"),
         ),
     )
-    session = ManagedProxySession(settings)
+    rotator = ProxyRotator(settings)
 
     servers = []
     for _ in range(3):
-        creds, _ = await session.acquire_credentials("example.com")
+        creds, _ = await rotator.next_credentials("example.com")
         assert creds is not None
         servers.append(creds.server)
-        await session.rotate("example.com", reason="test")
 
     assert servers == [
         "http://proxy-a:8080",
@@ -206,32 +190,13 @@ async def test_rotate_wraps_around_proxy_pool() -> None:
     ]
 
 
-async def test_auto_rotate_at_threshold() -> None:
-    settings = ProxySettings(
-        enabled=True,
-        url="http://proxy.example.com:8080",
-        username_template="user-session-{session_id}",
-        password="pass",
-        rotate_after_requests=3,
-        domain_delay=0.0,
-        block_backoff=0.0,
-    )
-    session = ManagedProxySession(settings)
-    usernames = []
-    for _ in range(4):
-        c, _ = await session.acquire_credentials("example.com")
-        assert c is not None
-        usernames.append(c.username)
-    # Acquisitions 1-3 use the same session; acquisition 4 triggers auto-rotation.
-    assert usernames[0] == usernames[1] == usernames[2]
-    assert usernames[3] != usernames[0]
-
-
-async def test_concurrent_acquire_consistent(proxy_settings: ProxySettings) -> None:
+async def test_concurrent_next_credentials_rotates_each_request(
+    proxy_settings: ProxySettings,
+) -> None:
     import asyncio
 
-    session = ManagedProxySession(proxy_settings)
-    results = await asyncio.gather(*[session.acquire_credentials("example.com") for _ in range(5)])
+    rotator = ProxyRotator(proxy_settings)
+    results = await asyncio.gather(*[rotator.next_credentials("example.com") for _ in range(5)])
     usernames = [r[0].username for r in results if r[0] is not None]
     assert len(usernames) == 5
-    assert len(set(usernames)) == 1  # all share the same initial session
+    assert len(set(usernames)) == 5

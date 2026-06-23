@@ -13,7 +13,7 @@ from crawl_tool.engine.config import AgentConfig
 from crawl_tool.engine.contract import CrawlRequest
 from crawl_tool.engine.crawler import fetch_page
 from crawl_tool.engine.models import PageResult
-from crawl_tool.engine.proxy import ManagedProxySession, ProxySettings
+from crawl_tool.engine.proxy import ProxyRotator, ProxySettings
 
 
 def _page_record(page: PageResult) -> dict:
@@ -76,15 +76,13 @@ async def execute(request: CrawlRequest, state: CrawlState) -> dict:
         Result payload with meta and pages.
     """
     settings = ProxySettings.from_env()
-    proxy_session: ManagedProxySession | None = (
-        ManagedProxySession(settings) if settings.enabled else None
-    )
+    proxy_rotator: ProxyRotator | None = ProxyRotator(settings) if settings.enabled else None
     config = request.to_agent_config()
     seed = request.seed_url
     if not config.goal and not config.extract_prompt:
         page = await fetch_page(
-            seed, css_selector=config.css_selector or None, proxy_session=proxy_session
+            seed, css_selector=config.css_selector or None, proxy_rotator=proxy_rotator
         )
         return _result_payload([page], _direct_run_meta(seed, page))
-    await run_agent(seed, config, state=state, proxy_session=proxy_session)
+    await run_agent(seed, config, state=state, proxy_rotator=proxy_rotator)
     return _result_payload(state.pages, _agent_run_meta(seed, config, state))

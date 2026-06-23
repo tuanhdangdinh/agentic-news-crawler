@@ -24,7 +24,7 @@ from crawl_tool.engine.extractor import extract as extractor_extract
 from crawl_tool.engine.extractor import infer_schema
 from crawl_tool.engine.models import PageResult
 from crawl_tool.engine.prompts import render
-from crawl_tool.engine.proxy import ManagedProxySession
+from crawl_tool.engine.proxy import ProxyRotator
 from crawl_tool.engine.schema_registry import match_registered_schema
 
 logger = structlog.get_logger(__name__)
@@ -449,7 +449,7 @@ async def run_agent(
     config: AgentConfig,
     state: CrawlState | None = None,
     *,
-    proxy_session: ManagedProxySession | None = None,
+    proxy_rotator: ProxyRotator | None = None,
 ) -> CrawlState:
     """Run the full agent crawl loop.
 
@@ -457,7 +457,7 @@ async def run_agent(
         seed_url: The URL to start crawling from.
         config: Crawl parameters and guardrails.
         state: Existing crawl state to update, or None to create one.
-        proxy_session: Optional managed proxy session for routing requests.
+        proxy_rotator: Optional proxy rotator for routing requests.
 
     Returns:
         CrawlState with all collected pages and run statistics.
@@ -521,7 +521,7 @@ async def run_agent(
         # OBSERVE — fetch the page
         logger.info("fetching", depth=depth, url=url)
         page = await fetch_page(
-            url, css_selector=config.css_selector or None, proxy_session=proxy_session
+            url, css_selector=config.css_selector or None, proxy_rotator=proxy_rotator
         )
         state.visited.add(url)
 
