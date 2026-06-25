@@ -6,6 +6,7 @@
 - Initial draft: integration tests, architecture doc, README update, css-selector flag, max-chars truncation, structured logging migration
 - Rev 2 (2026-06-09): recorded the live integration result and corrected the standalone fetch test targets
 - Rev 3 (2026-06-10): strengthened acceptance assertions, documented the Gradio and schema-registry paths, and recorded fresh verification
+- Rev 4 (2026-06-12): plan-compliance review — added Plan Deviations section; implemented depth ceiling, identifying User-Agent, and query-parameter canonicalization
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/17b19cd)
 
@@ -228,6 +229,31 @@ issue remains unresolved. The shim was outside the repository and removed after 
 | Date filtering is non-vacuous | At least one dated article is collected and in range | ✓ — Rev 3 live run |
 | Four-field extraction succeeds | Title, publish date, author, and summary keys exist | ✓ — Rev 3 live run |
 | Current unit suite passes | Non-integration suite exits 0 | ✓ — 212 passed in 4.16 s |
+
+---
+
+## Plan Deviations
+
+A Rev 4 compliance review compared the delivered tool against every MVP requirement in `docs/crawl-tool-intern-plan.md`. Three gaps were closed during the review:
+
+| Plan item | Resolution |
+|---|---|
+| Depth ceiling — refuse `max_depth` above 5 | `MAX_DEPTH_CEILING = 5` enforced on `AgentConfig.max_depth` (Pydantic `ge=0, le=5`); `main.py` refuses out-of-range values with a clear error before the crawl starts |
+| User-Agent identifies the tool and a contact email | `USER_AGENT = "crawl-tool/0.1 (+mailto:10422086@student.vgu.edu.vn)"` set on `BrowserConfig` in `src/crawler.py` |
+| Canonical URL normalizes query parameter order | `_canonical` now sorts query parameters (blank values preserved) in addition to stripping fragments, so `?a=1&b=2` and `?b=2&a=1` deduplicate to one fetch |
+
+The remaining deviations are accepted as out of MVP scope:
+
+| Plan item | Deviation | Rationale |
+|---|---|---|
+| `fetch(url)` agent tool | Not implemented | The loop auto-fetches from the frontier, so an agent-initiated fetch is redundant — documented in the Week 3 report |
+| robots.txt override toggle | No disable flag; robots.txt is always enforced at the fetch layer | Stricter than the plan; no use case required disabling compliance |
+| Crawl trap detection heuristic | Not implemented | `max_pages`, the depth ceiling, and dedup already bound every crawl; the template+query-param heuristic adds complexity without an observed failure on target sites |
+| URL pattern syntax | Glob (`fnmatch`) only; regex not supported | Glob covered every filtering need on the test sites |
+| Hard page cap default | `100` instead of the plan's `1000` | Conservative default keeps token cost bounded; the cap is user-configurable |
+| Borderline pages with confidence score | Not implemented | Optional plan item; the date filter is binary in/out with `--include-undated` for unknown dates |
+| Research report path | `docs/reports/week1_research_report.md` instead of `docs/research_report.md` | All weekly reports are grouped under `docs/reports/` |
+| PR cadence — at least 2 PRs per week | Work committed directly to `master` | Single-contributor repository; atomic Conventional Commits preserve reviewability |
 
 ---
 

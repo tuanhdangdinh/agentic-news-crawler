@@ -1,0 +1,62 @@
+<h2>How should “Key Financial Figures” use its column?</h2>
+<p class="subtitle">Same extracted data, three table treatments. Click the option you prefer.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#fff">
+      <div style="font:600 13px monospace;border:1px solid #d9ddda;border-radius:7px;overflow:hidden">
+        <div style="background:#f7f8f7;padding:10px;border-bottom:1px solid #d9ddda">Key Financial Figures</div>
+        <div style="padding:12px;line-height:1.65">
+          <div><b>Metric:</b> Shares issued</div>
+          <div><b>Value:</b> 22.38 million shares</div>
+          <div><b>Entity:</b> Vietjet</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. One field per line</h3>
+      <p>Keep one dynamic table column, add line breaks, enable wrapping, and let the row grow.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#fff">
+      <div style="font:600 13px monospace;border:1px solid #d9ddda;border-radius:7px;overflow:hidden">
+        <div style="background:#f7f8f7;padding:10px;border-bottom:1px solid #d9ddda">Key Financial Figures</div>
+        <div style="padding:10px">
+          <div style="padding:9px;border:1px solid #e1e4e2;border-radius:6px;background:#fafbfa">
+            <div style="color:#65716a;font-size:11px;text-transform:uppercase">Shares issued</div>
+            <div style="margin-top:5px">22.38 million shares</div>
+            <div style="margin-top:3px;color:#65716a">Vietjet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Mini-card per figure</h3>
+      <p>Strong visual grouping, but requires replacing the native Dataframe with custom HTML.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#fff">
+      <div style="font:600 12px monospace;display:grid;grid-template-columns:1fr 1.2fr .8fr;border:1px solid #d9ddda;border-radius:7px;overflow:hidden">
+        <div style="background:#f7f8f7;padding:9px;border-right:1px solid #d9ddda">Metric</div>
+        <div style="background:#f7f8f7;padding:9px;border-right:1px solid #d9ddda">Value</div>
+        <div style="background:#f7f8f7;padding:9px">Entity</div>
+        <div style="padding:10px;border-right:1px solid #d9ddda">Shares issued</div>
+        <div style="padding:10px;border-right:1px solid #d9ddda">22.38 million shares</div>
+        <div style="padding:10px">Vietjet</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Expand into columns</h3>
+      <p>Easiest to compare one figure, but ambiguous when an article contains several figures.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Recommendation</div>
+  <p><strong>Option A.</strong> It matches “spread over the column,” preserves sorting/search and dynamic fields, and needs only formatter plus wrapping changes.</p>
+</div>

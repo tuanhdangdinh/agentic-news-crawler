@@ -1,0 +1,276 @@
+<style>
+  .layout-grid {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .layout-card {
+    border: 1px solid #dfe4e1;
+    border-radius: 16px;
+    background: #fff;
+    cursor: pointer;
+    overflow: hidden;
+    transition: 160ms ease;
+  }
+  .layout-card:hover {
+    border-color: #c94f2d;
+    transform: translateY(-2px);
+  }
+  .layout-card.selected {
+    border-color: #c94f2d;
+    box-shadow: 0 0 0 2px rgba(201, 79, 45, 0.15);
+  }
+  .layout-head {
+    border-bottom: 1px solid #edf0ee;
+    padding: 14px 16px 10px;
+  }
+  .layout-head h3 {
+    margin: 0 0 4px;
+  }
+  .layout-head p {
+    color: #68736e;
+    font-size: 13px;
+    margin: 0;
+  }
+  .recommended {
+    color: #b54123;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .ui {
+    background: #f7f8f7;
+    min-height: 315px;
+    padding: 12px;
+  }
+  .toolbar {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .pill {
+    background: white;
+    border: 1px solid #dfe4e1;
+    border-radius: 999px;
+    color: #4e5b55;
+    font-size: 9px;
+    padding: 4px 7px;
+  }
+  .pill.active {
+    background: #fff0eb;
+    border-color: #e8b6a7;
+    color: #a83c20;
+  }
+  .search {
+    background: white;
+    border: 1px solid #dfe4e1;
+    border-radius: 6px;
+    color: #98a09c;
+    flex: 1;
+    font-size: 9px;
+    padding: 5px 7px;
+  }
+  .table {
+    background: white;
+    border: 1px solid #e3e7e5;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .row {
+    align-items: center;
+    border-bottom: 1px solid #eef0ef;
+    display: grid;
+    font-size: 8px;
+    gap: 6px;
+    grid-template-columns: 1.5fr .65fr .7fr .65fr;
+    min-height: 30px;
+    padding: 0 8px;
+  }
+  .row.header {
+    background: #f1f3f2;
+    color: #5f6a65;
+    font-weight: 700;
+    min-height: 25px;
+  }
+  .row.active {
+    background: #fff5f1;
+    box-shadow: inset 3px 0 #c94f2d;
+  }
+  .split-ui {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: 1.45fr .8fr;
+  }
+  .detail {
+    background: white;
+    border: 1px solid #e3e7e5;
+    border-radius: 8px;
+    font-size: 9px;
+    padding: 10px;
+  }
+  .detail h4 {
+    font-size: 11px;
+    margin: 0 0 10px;
+  }
+  .field {
+    border-bottom: 1px solid #f0f1f0;
+    margin-bottom: 7px;
+    padding-bottom: 7px;
+  }
+  .field b {
+    color: #79827e;
+    display: block;
+    font-size: 7px;
+    letter-spacing: .05em;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+  }
+  .stack-detail {
+    margin-top: 8px;
+    min-height: 92px;
+  }
+  .cards-ui {
+    display: grid;
+    gap: 7px;
+    grid-template-columns: 1fr 1fr;
+  }
+  .article-card {
+    background: white;
+    border: 1px solid #e3e7e5;
+    border-radius: 8px;
+    font-size: 8px;
+    padding: 9px;
+  }
+  .article-card b {
+    display: block;
+    font-size: 10px;
+    line-height: 1.25;
+    margin-bottom: 7px;
+  }
+  .meta {
+    color: #75807a;
+    margin-bottom: 5px;
+  }
+  .tradeoffs {
+    color: #4e5b55;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 12px 16px 16px;
+  }
+  @media (max-width: 900px) {
+    .layout-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<h2>How should extracted data appear?</h2>
+<p class="subtitle">
+  All options use dynamic extraction columns, show extracted pages by default,
+  and provide a “Show all pages” toggle.
+</p>
+
+<div class="layout-grid">
+  <div class="layout-card" data-choice="split" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <div class="recommended">Recommended</div>
+      <h3>A. Split table + detail panel</h3>
+      <p>Scan records while keeping the selected article visible.</p>
+    </div>
+    <div class="ui">
+      <div class="toolbar">
+        <span class="pill active">Extracted 12</span>
+        <span class="pill">All pages 15</span>
+        <span class="search">Search extracted data...</span>
+      </div>
+      <div class="split-ui">
+        <div class="table">
+          <div class="row header"><span>Title</span><span>Date</span><span>Author</span><span>Ticker</span></div>
+          <div class="row active"><span>ACB shareholder increases stake</span><span>10 Jun</span><span>Minh Anh</span><span>ACB</span></div>
+          <div class="row"><span>Gold prices continue to fall</span><span>10 Jun</span><span>Ha Thu</span><span>—</span></div>
+          <div class="row"><span>Market liquidity reaches new low</span><span>9 Jun</span><span>Quang Vu</span><span>VN30</span></div>
+          <div class="row"><span>Banking successors emerge</span><span>10 Jun</span><span>Staff</span><span>ACB</span></div>
+        </div>
+        <div class="detail">
+          <h4>ACB shareholder increases stake</h4>
+          <div class="field"><b>Publish date</b>2026-06-10</div>
+          <div class="field"><b>Author</b>Minh Anh</div>
+          <div class="field"><b>Stock tickers</b>ACB</div>
+          <div class="field"><b>Summary</b>Education executive raises her ACB holding...</div>
+        </div>
+      </div>
+    </div>
+    <div class="tradeoffs">
+      Best balance for desktop analysis. The detail panel can move below the
+      table on mobile. Less horizontal space remains for many dynamic columns.
+    </div>
+  </div>
+
+  <div class="layout-card" data-choice="stacked" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <h3>B. Full-width table + detail below</h3>
+      <p>Prioritizes column visibility and spreadsheet-like scanning.</p>
+    </div>
+    <div class="ui">
+      <div class="toolbar">
+        <span class="pill active">Extracted 12</span>
+        <span class="pill">All pages 15</span>
+        <span class="search">Search extracted data...</span>
+      </div>
+      <div class="table">
+        <div class="row header"><span>Title</span><span>Date</span><span>Author</span><span>Ticker</span></div>
+        <div class="row active"><span>ACB shareholder increases stake</span><span>10 Jun</span><span>Minh Anh</span><span>ACB</span></div>
+        <div class="row"><span>Gold prices continue to fall</span><span>10 Jun</span><span>Ha Thu</span><span>—</span></div>
+        <div class="row"><span>Market liquidity reaches new low</span><span>9 Jun</span><span>Quang Vu</span><span>VN30</span></div>
+      </div>
+      <div class="detail stack-detail">
+        <h4>Selected article details</h4>
+        <div class="field"><b>Summary</b>Education executive raises her ACB holding...</div>
+      </div>
+    </div>
+    <div class="tradeoffs">
+      Gives dynamic columns maximum width and works well on smaller screens.
+      Comparing table rows with details requires more vertical movement.
+    </div>
+  </div>
+
+  <div class="layout-card" data-choice="cards" onclick="toggleSelect(this)">
+    <div class="layout-head">
+      <h3>C. Article cards + detail modal</h3>
+      <p>Readable summaries with less spreadsheet density.</p>
+    </div>
+    <div class="ui">
+      <div class="toolbar">
+        <span class="pill active">Extracted 12</span>
+        <span class="pill">All pages 15</span>
+        <span class="search">Search extracted data...</span>
+      </div>
+      <div class="cards-ui">
+        <div class="article-card">
+          <b>ACB shareholder increases stake</b>
+          <div class="meta">10 Jun · Minh Anh · ACB</div>
+          Education executive raises her ACB holding...
+        </div>
+        <div class="article-card">
+          <b>Gold prices continue to fall</b>
+          <div class="meta">10 Jun · Ha Thu</div>
+          Domestic gold prices declined again...
+        </div>
+        <div class="article-card">
+          <b>Market liquidity reaches new low</b>
+          <div class="meta">9 Jun · Quang Vu · VN30</div>
+          Trading value fell to its lowest level...
+        </div>
+        <div class="article-card">
+          <b>Banking successors emerge</b>
+          <div class="meta">10 Jun · Staff · ACB</div>
+          A new generation enters bank leadership...
+        </div>
+      </div>
+    </div>
+    <div class="tradeoffs">
+      Strong for reading and presentation. Weakest option for comparing many
+      records or prompts that produce numerous dynamic fields.
+    </div>
+  </div>
+</div>

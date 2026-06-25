@@ -1,0 +1,273 @@
+<style>
+  .result-shell {
+    background: #fbfbfa;
+    border: 1px solid #e0e4e1;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(24, 35, 31, .06);
+    overflow: hidden;
+  }
+  .result-top {
+    align-items: center;
+    background: linear-gradient(135deg, #fff0ea, #fff 70%);
+    border-bottom: 1px solid #e7e9e8;
+    display: flex;
+    justify-content: space-between;
+    padding: 18px 20px;
+  }
+  .result-top h3 { margin: 0 0 4px; }
+  .result-top p { color: #68736e; font-size: 13px; margin: 0; }
+  .download {
+    background: #c94f2d;
+    border-radius: 9px;
+    color: white;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 9px 13px;
+  }
+  .tabs {
+    background: white;
+    border-bottom: 1px solid #e7e9e8;
+    display: flex;
+    gap: 22px;
+    padding: 0 20px;
+  }
+  .tab {
+    color: #68736e;
+    font-size: 13px;
+    padding: 13px 0 11px;
+  }
+  .tab.active {
+    border-bottom: 2px solid #c94f2d;
+    color: #18231f;
+    font-weight: 700;
+  }
+  .toolbar {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    padding: 14px;
+  }
+  .search {
+    background: white;
+    border: 1px solid #dce1de;
+    border-radius: 8px;
+    color: #8a948f;
+    flex: 1;
+    font-size: 12px;
+    padding: 9px 11px;
+  }
+  .toggle {
+    background: white;
+    border: 1px solid #dce1de;
+    border-radius: 999px;
+    display: flex;
+    font-size: 11px;
+    padding: 3px;
+  }
+  .toggle span { border-radius: 999px; padding: 6px 9px; }
+  .toggle .active { background: #fff0ea; color: #ad3e22; font-weight: 700; }
+  .count { color: #76817b; font-size: 11px; }
+  .result-body {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(0, 1.55fr) minmax(260px, .65fr);
+    padding: 0 14px 14px;
+  }
+  .table-wrap {
+    background: white;
+    border: 1px solid #e0e4e1;
+    border-radius: 10px;
+    overflow: auto;
+  }
+  .data-row {
+    align-items: center;
+    border-bottom: 1px solid #eef0ef;
+    display: grid;
+    font-size: 10px;
+    gap: 10px;
+    grid-template-columns: 34px minmax(180px, 1.6fr) 80px 90px 90px minmax(130px, 1fr);
+    min-width: 680px;
+    padding: 0 10px;
+  }
+  .data-row.header {
+    background: #f2f4f3;
+    color: #59645f;
+    font-size: 9px;
+    font-weight: 750;
+    min-height: 34px;
+    position: sticky;
+    top: 0;
+  }
+  .sort { color: #a1aaa5; margin-left: 2px; }
+  .data-row.item { min-height: 45px; }
+  .data-row.item.selected {
+    background: #fff7f4;
+    box-shadow: inset 3px 0 #c94f2d;
+  }
+  .status {
+    background: #e9f6ef;
+    border-radius: 999px;
+    color: #28754b;
+    font-size: 8px;
+    padding: 4px 6px;
+    text-align: center;
+  }
+  .detail {
+    background: white;
+    border: 1px solid #e0e4e1;
+    border-radius: 10px;
+    padding: 15px;
+  }
+  .detail-label {
+    color: #8a948f;
+    font-size: 8px;
+    font-weight: 750;
+    letter-spacing: .06em;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .detail h4 { font-size: 15px; line-height: 1.3; margin: 0 0 13px; }
+  .detail-field {
+    border-top: 1px solid #eef0ef;
+    font-size: 11px;
+    line-height: 1.45;
+    padding: 10px 0;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .chip {
+    background: #f2f4f3;
+    border-radius: 999px;
+    color: #4e5b55;
+    font-size: 9px;
+    padding: 4px 7px;
+  }
+  .source {
+    color: #b64325;
+    display: block;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .note {
+    background: #f7f8f7;
+    border-radius: 8px;
+    color: #65706a;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-top: 16px;
+    padding: 13px 15px;
+  }
+  @media (max-width: 850px) {
+    .result-body { grid-template-columns: 1fr; }
+    .toolbar { align-items: stretch; flex-direction: column; }
+  }
+</style>
+
+<h2>Proposed extracted-data result view</h2>
+<p class="subtitle">This is the consolidated first-version design based on your choices.</p>
+
+<div class="result-shell">
+  <div class="result-top">
+    <div>
+      <h3>Crawl results</h3>
+      <p>12 extracted records from 15 crawled pages</p>
+    </div>
+    <div class="download">Download JSON</div>
+  </div>
+  <div class="tabs">
+    <div class="tab active">Extracted Data</div>
+    <div class="tab">Raw JSON</div>
+  </div>
+  <div class="toolbar">
+    <div class="search">Search any extracted field...</div>
+    <div class="toggle">
+      <span class="active">Extracted 12</span>
+      <span>All pages 15</span>
+    </div>
+    <div class="count">12 rows</div>
+  </div>
+  <div class="result-body">
+    <div class="table-wrap">
+      <div class="data-row header">
+        <span>#</span>
+        <span>Article title <span class="sort">↕</span></span>
+        <span>Date <span class="sort">↕</span></span>
+        <span>Author <span class="sort">↕</span></span>
+        <span>Tickers <span class="sort">↕</span></span>
+        <span>Key figures <span class="sort">↕</span></span>
+      </div>
+      <div class="data-row item selected">
+        <span>1</span>
+        <strong>ACB shareholder increases stake</strong>
+        <span>2026-06-10</span>
+        <span>Minh Anh</span>
+        <span>ACB</span>
+        <span>102m shares · ₫10tn</span>
+      </div>
+      <div class="data-row item">
+        <span>2</span>
+        <strong>Gold prices continue to fall</strong>
+        <span>2026-06-10</span>
+        <span>Ha Thu</span>
+        <span>—</span>
+        <span>−₫5m/tael · −₫50m</span>
+      </div>
+      <div class="data-row item">
+        <span>3</span>
+        <strong>Market liquidity reaches new low</strong>
+        <span>2026-06-09</span>
+        <span>Quang Vu</span>
+        <span>VN30</span>
+        <span>Lowest in 1 year</span>
+      </div>
+      <div class="data-row item">
+        <span>4</span>
+        <strong>Banking successors emerge</strong>
+        <span>2026-06-10</span>
+        <span>Staff</span>
+        <span>ACB, SHB</span>
+        <span>Assets above ₫1qn</span>
+      </div>
+    </div>
+    <aside class="detail">
+      <div class="detail-label">Selected record</div>
+      <h4>ACB shareholder increases stake</h4>
+      <span class="status">Extraction successful</span>
+      <div class="detail-field">
+        <div class="detail-label">Publish date</div>
+        2026-06-10
+      </div>
+      <div class="detail-field">
+        <div class="detail-label">Author</div>
+        Minh Anh
+      </div>
+      <div class="detail-field">
+        <div class="detail-label">Stock tickers</div>
+        <div class="chips"><span class="chip">ACB</span></div>
+      </div>
+      <div class="detail-field">
+        <div class="detail-label">Key financial figures</div>
+        <div class="chips">
+          <span class="chip">102 million shares</span>
+          <span class="chip">Nearly ₫10 trillion</span>
+        </div>
+      </div>
+      <div class="detail-field">
+        <div class="detail-label">Summary</div>
+        An education executive accumulated another 102 million ACB shares over
+        two months, bringing the holding's value close to ₫10 trillion.
+      </div>
+      <div class="detail-field">
+        <div class="detail-label">Source URL</div>
+        <span class="source">https://cafef.vn/nu-dai-gia-nganh-giao-duc...</span>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="note">
+  Dynamic columns come from the union of extracted keys. Arrays and objects are
+  summarized into readable table text, while the detail panel preserves their
+  full structure. On narrow screens, the detail panel moves below the table.
+</div>

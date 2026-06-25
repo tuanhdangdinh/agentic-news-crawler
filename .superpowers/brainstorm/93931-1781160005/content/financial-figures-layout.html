@@ -1,0 +1,164 @@
+<style>
+  .figure-preview {
+    border: 1px solid #e3e7e5;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+    font-family: Inter, system-ui, sans-serif;
+    color: #28322f;
+  }
+  .figure-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 24px;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 14px;
+    border-bottom: 1px solid #edf0ef;
+  }
+  .figure-row:last-child { border-bottom: 0; }
+  .figure-metric { font-size: 13px; font-weight: 650; line-height: 1.35; }
+  .figure-meta { margin-top: 4px; color: #76807c; font-size: 11px; }
+  .figure-value { color: #c94f2d; font-size: 14px; font-weight: 800; white-space: nowrap; }
+  .figure-toggle {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1px solid #dce2df;
+    border-radius: 6px;
+    color: #68736f;
+    font-size: 12px;
+  }
+  .figure-context {
+    grid-column: 1 / -1;
+    padding: 9px 10px;
+    border-left: 2px solid #c94f2d;
+    background: #fbf5f2;
+    color: #636d69;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .mini-card-grid { display: grid; gap: 8px; padding: 10px; background: #f7f8f7; }
+  .mini-card {
+    padding: 12px;
+    border: 1px solid #e4e8e6;
+    border-radius: 8px;
+    background: white;
+  }
+  .mini-card .figure-value { display: block; margin: 7px 0 5px; font-size: 18px; }
+  .dense-head, .dense-row {
+    display: grid;
+    grid-template-columns: 1.6fr 0.8fr 0.75fr 22px;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 10px;
+  }
+  .dense-head {
+    background: #f6f7f6;
+    color: #747e7a;
+    font-size: 10px;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .dense-row { border-top: 1px solid #edf0ef; font-size: 11px; }
+  .dense-row .figure-value { font-size: 12px; }
+  .recommend {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #eaf4ee;
+    color: #34724e;
+    font-size: 10px;
+    font-weight: 750;
+  }
+</style>
+
+<h2>How should financial figures scan?</h2>
+<p class="subtitle">All variants keep context collapsed until the user opens a figure.</p>
+
+<div class="cards">
+  <div class="card" data-choice="compact-ledger" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="figure-preview">
+        <div class="figure-row">
+          <div>
+            <div class="figure-metric">Trading value</div>
+            <div class="figure-meta">HoSE</div>
+          </div>
+          <div class="figure-value">11,287 billion VND</div>
+          <div class="figure-toggle">⌄</div>
+        </div>
+        <div class="figure-row">
+          <div>
+            <div class="figure-metric">Price increase</div>
+            <div class="figure-meta">ACB · 14 trading sessions</div>
+          </div>
+          <div class="figure-value">17%</div>
+          <div class="figure-toggle">⌃</div>
+          <div class="figure-context">ACB stock price increased nearly 17% over 14 trading sessions.</div>
+        </div>
+        <div class="figure-row">
+          <div>
+            <div class="figure-metric">Foreign investor net selling</div>
+            <div class="figure-meta">HoSE</div>
+          </div>
+          <div class="figure-value">−868.5 billion VND</div>
+          <div class="figure-toggle">⌄</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Compact ledger <span class="recommend">Recommended</span></h3>
+      <p>Strong metric/value scan, minimal repetition, and a full-width context disclosure.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="stacked-cards" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="figure-preview mini-card-grid">
+        <div class="mini-card">
+          <div class="figure-metric">Trading value</div>
+          <span class="figure-value">11,287 billion VND</span>
+          <div class="figure-meta">HoSE <span style="float:right">Details ⌄</span></div>
+        </div>
+        <div class="mini-card">
+          <div class="figure-metric">Price increase</div>
+          <span class="figure-value">17%</span>
+          <div class="figure-meta">ACB · 14 trading sessions <span style="float:right">Details ⌄</span></div>
+        </div>
+        <div class="mini-card">
+          <div class="figure-metric">Foreign investor net selling</div>
+          <span class="figure-value">−868.5 billion VND</span>
+          <div class="figure-meta">HoSE <span style="float:right">Details ⌄</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Stacked cards</h3>
+      <p>More visual separation and larger values, but long articles become tall quickly.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="dense-grid" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="figure-preview">
+        <div class="dense-head"><span>Metric</span><span>Value</span><span>Entity / Period</span><span></span></div>
+        <div class="dense-row">
+          <span>Trading value</span><span class="figure-value">11,287 bn VND</span><span>HoSE</span><span>⌄</span>
+        </div>
+        <div class="dense-row">
+          <span>Price increase</span><span class="figure-value">17%</span><span>ACB · 14 sessions</span><span>⌄</span>
+        </div>
+        <div class="dense-row">
+          <span>Foreign net selling</span><span class="figure-value">−868.5 bn VND</span><span>HoSE</span><span>⌄</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Dense grid</h3>
+      <p>Fits the most figures, but resembles the existing table and compresses long labels.</p>
+    </div>
+  </div>
+</div>

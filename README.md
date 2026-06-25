@@ -44,6 +44,57 @@ crawl-tool/
 
 ---
 
+## Crawl Flow
+
+```
+execute()                          runner.py
+  └─ run_agent()                   agent.py
+       │
+       ├─ SETUP
+       │    ├─ resolve extract schema (registry → infer_schema → explicit file)
+       │    ├─ parse date filter
+       │    └─ seed frontier: [(seed_url, depth=0)]
+       │
+       └─ LOOP: while frontier not empty
+            │
+            ├─ GUARD: max_pages? token_budget? → break
+            │
+            ├─ OBSERVE
+            │    └─ fetch_page(url)              crawler.py
+            │         ├─ Crawl4AI renders page (headless Chromium)
+            │         ├─ applies CSS selector (article-body scoping)
+            │         └─ returns PageResult {markdown, links, metadata}
+            │
+            ├─ FILTER
+            │    ├─ fetch failed? → skip
+            │    └─ is_article_page + date_range? → drop if outside range
+            │
+            ├─ COLLECT
+            │    ├─ state.pages.append(page)
+            │    └─ is_article_page? → state.article_pages.append(url)
+            │
+            ├─ DECIDE + ACT  (_agent_turn)
+            │    ├─ build system prompt (goal, depth, budget, visited count…)
+            │    ├─ Claude reads page markdown + links
+            │    └─ Claude calls tools:
+            │         ├─ add_to_frontier(url) → guardrails → frontier.append
+            │         ├─ mark_visited(url)    → state.visited.add
+            │         ├─ extract(prompt)      → extractor.py → structured JSON
+            │         └─ finish(reason)       → finish guard check → stop or reject
+            │
+            └─ AUTO-EXTRACT
+                 └─ if extract_prompt set AND is_article_page AND not yet extracted
+                      └─ extractor_extract(page, prompt, schema)
+```
+
+**Key invariants:**
+- One page fetched per iteration — never parallel
+- Claude only sees `links_internal` from the current page — can't hallucinate URLs
+- `finish` is rejected (loop continues) if frontier has reachable URLs or `min_articles` not met
+- `extract_schema` is resolved once at loop start and reused for every page
+
+---
+
 ## Features
 
 - Goal-directed crawling — describe what you want in plain language

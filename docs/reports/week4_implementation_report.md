@@ -9,6 +9,7 @@
 - Rev 4 (2026-06-04): logging migrated from stdlib to structlog with JSON output; `src/logging_config.py` added
 - Rev 5 (2026-06-04): extraction hardened — snake_case schema keys, recursive nullable, title/date header injection, and article-body scoping that strips sidebar noise without truncation
 - Rev 6 (2026-06-05): author extraction and article-body scoping hardened across Vietnamese publishers; near-empty scoped markdown now falls back to full-page fetch
+- Rev 7 (2026-06-12): validation strictness split — `_make_nullable` moved from `infer_schema` to extract-time validation behind a `lenient` flag; explicit (user-file and registry) schemas now validate strictly as written, inferred schemas validate against a nullable copy, and Claude is always shown the original schema
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/4c181a30de2931d54cccafb1edd93b401d9ee898)
 
