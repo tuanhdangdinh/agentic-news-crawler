@@ -31,6 +31,7 @@ dev = [
     "pytest-httpx>=0.35.0",
     "ruff>=0.4.0",
     "certifi>=2024.0.0",
+    "testcontainers[minio]>=4.14.2",
 ]
 
 [project.scripts]
