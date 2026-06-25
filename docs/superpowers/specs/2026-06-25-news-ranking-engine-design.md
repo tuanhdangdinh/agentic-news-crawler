@@ -4,7 +4,8 @@
 
 **Revision history:**
 
-- Initial draft.
+- Initial draft: unify impact and briefing into one ranking engine behind a general `--prompt`.
+- Rev 2: bound rank-mode fanout (rank-specific `max_pages`, job-wide article cap, scoring concurrency limit), account scoring tokens, match article pages on `final_url`, split `filtered_count` into weak vs error counts, constrain `intent` to an enum.
 
 ---
 
@@ -141,9 +142,15 @@ record, because the ranked output never consumes raw extracted facts (see Out of
 
 ### Design Decisions
 
-- **One Claude call per article**, parallelized with `asyncio.gather`, mirroring the
+- **One Claude call per article**, parallelized with a **bounded** `asyncio.gather`, mirroring the
   `extractor.extract()` pattern (render template → Haiku → `json.loads` → `jsonschema.validate`, never
   raises — returns an error record on failure).
+- **Concurrency is capped by a `Semaphore`** (`SCORING_CONCURRENCY`, default 8). Unbounded
+  `gather` over every article would fire hundreds of simultaneous Claude calls and hit rate limits
+  before any token budget — the cap is a correctness/safety requirement, not a tuning nicety. The
+  caller passes **one shared `AsyncAnthropic` client** through the whole gather.
+- **`score_article` returns its token usage** alongside the scored record, so the runner can sum
+  scoring tokens into the payload (crawl accounting at `agent.py:392-393` covers only the crawl).
 - **Pluggable prompt, fixed code path.** `mode` selects `score_impact.j2` vs `score_significance.j2`
   and the validation schema. Everything else is shared.
 - **Impact score scale: signed −5..+5** per target — sign encodes direction, magnitude encodes
@@ -153,8 +160,11 @@ record, because the ranked output never consumes raw extracted facts (see Out of
 - **Every score carries an `evidence` quote** lifted from the article, making each score auditable.
   Without it a score is unfalsifiable; with it the user can trust or overrule in seconds.
 - **Ranking and filtering are pure Python** (`sorted()` + a threshold) — not an LLM step.
-- **Filter default: drop articles whose sort key magnitude `< 2`, and report a `filtered_count`** so
-  the output is never silently lossy. Threshold is a module constant, easy to tune.
+- **Filter default: drop articles whose sort key magnitude `< 2`** (module constant, easy to tune).
+- **Weak filtering and scoring errors are counted separately**, not merged. Conflating
+  "irrelevant article" with "Claude/JSON/API failure" would undermine the not-silently-lossy goal:
+  the first is a real ranking outcome, the second is a failure the user should see. `rank_and_filter`
+  returns both counts, and the runner surfaces error summaries in `meta` (see payload).
 
 ### Public Interface
 
@@ -163,16 +173,20 @@ async def score_article(
     page: PageResult,
     mode: str,                      # "impact" | "significance"
     targets: list[str],             # used by impact mode; ignored by significance mode
-    client: anthropic.AsyncAnthropic | None = None,
+    *,
+    client: anthropic.AsyncAnthropic,   # shared across the whole gather
+    semaphore: asyncio.Semaphore,       # bounds concurrent Claude calls
 ) -> dict
 
-def rank_and_filter(scored: list[dict]) -> tuple[list[dict], int]
+def rank_and_filter(scored: list[dict]) -> tuple[list[dict], int, list[dict]]
 ```
 
 - `score_article` returns a scored record (shapes below) on success, or
-  `{"error": "<message>", "url": ...}` on parse/validation/API failure. Never raises.
-- `rank_and_filter` returns `(ranked_kept_articles, filtered_count)` — sorted descending by sort key,
-  weak items removed. Error records are dropped and counted as filtered.
+  `{"error": "<message>", "url": ...}` on parse/validation/API failure. Never raises. Both shapes carry
+  a `usage` field (`{"input_tokens": int, "output_tokens": int}`) so the runner can sum scoring tokens.
+- `rank_and_filter` returns `(ranked_kept_articles, weak_filtered_count, error_records)` — sorted
+  descending by sort key, weak items removed and counted, error records separated out (not silently
+  dropped) for the runner to summarize in `meta`.
 
 ### Scored record shapes
 
@@ -222,11 +236,23 @@ Significance mode:
 - **Multi-source crawl runs in parallel** via `asyncio.gather`, one `run_agent` per source, each with
   its own `CrawlState`. Results are concatenated. Parallel fits the async-everywhere rule and is
   fastest for N sources.
+- **Fanout is bounded on three axes.** Without caps, N sources × `max_pages=100` × a scoring call each
+  is unbounded cost and concurrency:
+  - **Per-source pages:** rank config uses `RANK_MAX_PAGES` (default 25), not the crawl default of 100.
+  - **Job-wide articles scored:** after concatenation, the article list is truncated to
+    `RANK_MAX_ARTICLES` (default 60) before scoring, so total scoring calls have a hard ceiling
+    regardless of source count.
+  - **Scoring concurrency:** the `Semaphore` from `ranker.py` (`SCORING_CONCURRENCY`, default 8).
+  - Per-source token budget still applies inside each `run_agent`; these caps bound the rank job *as a
+    whole*, which the per-`CrawlState` budget cannot.
 - Each per-source `run_agent` uses a synthesized rank config: a goal of "collect today's economy /
-  finance article pages", the resolved `date_filter` (defaulting to today for `rank`), and **no
-  per-page extraction** (scoring happens after the crawl, not during).
-- Article pages to score are the pages classified as articles across all source states
-  (`state.article_pages`).
+  finance article pages", the resolved `date_filter` (defaulting to today for `rank`), `RANK_MAX_PAGES`,
+  and **no per-page extraction** (scoring happens after the crawl, not during).
+- Article pages to score are the pages whose **`final_url`** is in a source's `state.article_pages`
+  — `run_agent` records `page.final_url` there (`agent.py:541`), so matching on `page.url` would drop
+  any article that redirected.
+- **Token accounting sums crawl + scoring.** The payload's `total_input_tokens`/`total_output_tokens`
+  add the per-source crawl totals to the `usage` returned by every `score_article` call.
 - **Live progress is coarse for rank jobs (phase 1).** Each source crawls into its own `CrawlState`,
   so the job-level `state` the service polls for `pages_collected` is not updated during a rank run;
   progress reflects 0 until the run completes. Accurate cross-source progress aggregation is phase 2.
@@ -243,18 +269,27 @@ async def execute(request: CrawlRequest, state: CrawlState) -> dict:
 
 async def _execute_rank(request, state, proxy_rotator) -> dict:
     sources = select_sources(request.targets)
-    rank_config = _rank_config(request)            # goal synthesized, extract disabled, date=today
+    rank_config = _rank_config(request)            # RANK_MAX_PAGES, extract disabled, date=today
     # run_agent populates a passed-in CrawlState in place, so pre-create one per source.
     states = [CrawlState() for _ in sources]
     await asyncio.gather(*[
         run_agent(src, rank_config, state=st, proxy_rotator=proxy_rotator)
         for src, st in zip(sources, states, strict=True)
     ])
-    articles = [p for st in states for p in st.pages if p.url in st.article_pages]
+    # Match on final_url (run_agent records final_url in article_pages), then cap job-wide.
+    articles = [
+        p for st in states for p in st.pages if p.final_url in st.article_pages
+    ][:RANK_MAX_ARTICLES]
+
     mode = "impact" if request.targets else "significance"
-    scored = await asyncio.gather(*[score_article(p, mode, request.targets) for p in articles])
-    ranked, filtered = rank_and_filter([s for s in scored])
-    return _ranked_payload(request, mode, ranked, filtered, states)
+    client = anthropic.AsyncAnthropic()
+    semaphore = asyncio.Semaphore(SCORING_CONCURRENCY)
+    scored = await asyncio.gather(*[
+        score_article(p, mode, request.targets, client=client, semaphore=semaphore)
+        for p in articles
+    ])
+    ranked, weak_filtered, errors = rank_and_filter(scored)
+    return _ranked_payload(request, mode, ranked, weak_filtered, errors, states, scored)
 ```
 
 ### Ranked payload
@@ -267,7 +302,9 @@ async def _execute_rank(request, state, proxy_rotator) -> dict:
     "targets": ["..."],
     "sources_crawled": ["..."],
     "articles_scored": 23,
-    "filtered_count": 18,
+    "weak_filtered_count": 15,
+    "score_error_count": 3,
+    "score_errors": [{"url": "...", "error": "..."}],
     "total_input_tokens": 0,
     "total_output_tokens": 0
   },
@@ -275,8 +312,10 @@ async def _execute_rank(request, state, proxy_rotator) -> dict:
 }
 ```
 
-`targets` is present only in impact mode. `meta` reuses the existing token/page accounting summed
-across source states.
+`targets` is present only in impact mode. `weak_filtered_count` is articles dropped below the score
+threshold; `score_error_count` and `score_errors` capture scoring failures separately so they are never
+silently lost. `total_input_tokens`/`total_output_tokens` sum the per-source crawl totals **and** the
+`usage` from every `score_article` call.
 
 ---
 
@@ -296,10 +335,14 @@ flows out of the parser, not the entry surface.
 Add to `CrawlRequest`:
 
 ```python
-intent: str = "crawl"
+intent: Literal["crawl", "rank"] = "crawl"
 targets: list[str] = Field(default_factory=list)
 ```
 
+- **`intent` is a constrained `Literal`, not a bare `str`** — `CrawlRequest` is the public HTTP model,
+  so an unconstrained string would let a direct API body like `{"intent": "foo"}` pass validation and
+  fall through to the crawl path. `Literal` (or a `str` Enum, matching `JobStatus`) makes the API reject
+  it. The values match the parser's `intent` schema.
 - Update `_require_seed_url_or_prompt`: `seed_url` is required for `intent == "crawl"` only; `rank`
   requests are valid without a `seed_url`.
 - `to_agent_config()` is unchanged — `intent`/`targets` are read by the runner's dispatch, not by
@@ -320,8 +363,8 @@ targets: list[str] = Field(default_factory=list)
 | `crawl` intent, no seed URL | unchanged — CLI logs and returns; HTTP 400 / 422 |
 | `rank` intent, no seed URL | normal — sources come from `select_sources()` |
 | Prompt parse fails (bad JSON / schema) | unchanged — CLI returns; HTTP 400 |
-| One article's `score_article` fails | error record dropped, counted in `filtered_count`; crawl continues |
-| All articles filtered out | empty `ranked_articles` with `filtered_count` equal to articles scored — valid result, not an error |
+| One article's `score_article` fails | error record separated into `score_errors`, counted in `score_error_count`; crawl continues |
+| All articles weak | empty `ranked_articles` with `weak_filtered_count` equal to articles scored — valid result, not an error |
 | `select_sources` returns the curated list | always non-empty in phase 1 |
 
 `score_article` never raises (matches `extractor.extract`), so one bad page never sinks a ranking run.
@@ -344,23 +387,29 @@ Mock `crawl_tool.engine.ranker.anthropic.AsyncAnthropic`, matching `test_extract
 5. Impact mode, two targets → record has one `impacts[]` entry per target and correct `max_abs_impact`.
 6. Significance mode → record has a 0..5 `significance`, `rationale`, `evidence`; no `impacts`.
 7. Malformed Claude JSON → error record returned, never raises.
-8. `rank_and_filter` drops sort-key `< 2`, sorts descending, returns correct `filtered_count`.
-9. `rank_and_filter` with all error records → empty list, `filtered_count` equals input length.
+8. `rank_and_filter` drops sort-key `< 2`, sorts descending, returns correct `weak_filtered_count`.
+9. `rank_and_filter` separates error records from weak ones — `error_records` and `weak_filtered_count`
+   are counted independently, error records never appear in the ranked list.
+10. `score_article` returns a `usage` field on both success and error records.
 
 ### `tests/engine/test_sources.py` (new)
 
-10. `select_sources([...])` returns the non-empty curated list regardless of `targets`.
+11. `select_sources([...])` returns the non-empty curated list regardless of `targets`.
 
 ### `tests/engine/test_runner.py` (extend or new)
 
-11. `intent == "rank"` dispatches `_execute_rank`, gathers `run_agent` per source, scores article pages,
-    returns a `ranked_articles` payload (all collaborators mocked).
-12. `intent == "crawl"` path unchanged.
+12. `intent == "rank"` dispatches `_execute_rank`, gathers `run_agent` per source, scores article pages
+    (matched on `final_url`), returns a `ranked_articles` payload (all collaborators mocked).
+13. Job-wide cap: more than `RANK_MAX_ARTICLES` article pages collected → only `RANK_MAX_ARTICLES` scored.
+14. Redirected article (`page.url != page.final_url`, `final_url` in `article_pages`) is still scored.
+15. Payload `total_*_tokens` equals crawl totals plus summed `score_article` usage.
+16. `intent == "crawl"` path unchanged.
 
 ### `tests/engine/test_service.py` (extend)
 
-13. `POST /crawl` with a `rank` prompt and no `seed_url` → job created (no 400).
-14. `POST /crawl` with a `crawl` prompt and no resolvable `seed_url` → 400 (unchanged).
+17. `POST /crawl` with a `rank` prompt and no `seed_url` → job created (no 400).
+18. `POST /crawl` with a `crawl` prompt and no resolvable `seed_url` → 400 (unchanged).
+19. `POST /crawl` with `{"intent": "foo"}` → 422 (rejected by the `Literal`).
 
 ---
 
