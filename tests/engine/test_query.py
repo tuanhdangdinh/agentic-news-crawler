@@ -79,6 +79,13 @@ def test_execute_query_respects_limit(tmp_path):
     assert len(rows) == 2
 
 
+def test_execute_query_returns_empty_for_empty_directory(tmp_path):
+    # No files written — glob matches nothing
+    path = str(tmp_path / "crawl-*.json")
+    rows = _execute_query(_conn(), path, CrawlQuery())
+    assert rows == []
+
+
 def test_execute_query_returns_empty_for_no_match(tmp_path):
     _write_fixture(tmp_path / "crawl-a.json", "a", "https://vnexpress.net", "news", "2026-06-20T10:00:00Z")
     path = str(tmp_path / "crawl-*.json")

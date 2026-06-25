@@ -20,10 +20,10 @@ def _configure_s3(conn: duckdb.DuckDBPyConnection, settings: StorageSettings) ->
     conn.execute("LOAD httpfs")
     conn.execute("SET s3_region='us-east-1'")
     conn.execute("SET s3_url_style='path'")
-    conn.execute(f"SET s3_endpoint='{settings.endpoint}'")
-    conn.execute(f"SET s3_access_key_id='{settings.access_key}'")
-    conn.execute(f"SET s3_secret_access_key='{settings.secret_key}'")
-    conn.execute(f"SET s3_use_ssl={'true' if settings.secure else 'false'}")
+    conn.execute("SET s3_endpoint = ?", [settings.endpoint])
+    conn.execute("SET s3_access_key_id = ?", [settings.access_key])
+    conn.execute("SET s3_secret_access_key = ?", [settings.secret_key])
+    conn.execute("SET s3_use_ssl = ?", ["true" if settings.secure else "false"])
 
 
 def _execute_query(
@@ -65,7 +65,10 @@ def _execute_query(
         {where}
         LIMIT ?
     """
-    rows = conn.execute(sql, params).fetchall()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except duckdb.IOException:
+        return []
     return [dict(zip(_COLS, row, strict=True)) for row in rows]
 
 
