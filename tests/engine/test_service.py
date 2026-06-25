@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -298,3 +298,93 @@ async def test_terminal_jobs_are_purged_after_ttl(monkeypatch):
             expired = await client.get(f"/crawl/{first['job_id']}")
             await _poll_until_terminal(client, second["job_id"])
     assert expired.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_query_returns_503_when_storage_disabled():
+    app = create_app()
+    async with _client(app) as client:
+        resp = await client.post("/query", json={})
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_storage_endpoint_returns_503_when_storage_disabled():
+    app = create_app()
+    async with _client(app) as client:
+        resp = await client.get("/storage/somejob")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_query_returns_results_when_storage_enabled():
+    from crawl_tool.engine.contract import CrawlSummary
+
+    summary = CrawlSummary(
+        job_id="abc",
+        seed_url="https://test.com",
+        goal="news",
+        generated_at="2026-06-25T00:00:00Z",
+        total_pages=3,
+        successful=3,
+        failed=0,
+    )
+    with (
+        patch("crawl_tool.engine.service.StorageSettings") as mock_settings_cls,
+        patch("crawl_tool.engine.service.run_query", new_callable=AsyncMock) as mock_query,
+    ):
+        mock_settings_cls.from_env.return_value = MagicMock(enabled=True)
+        mock_query.return_value = [summary]
+        app = create_app()
+        async with _client(app) as client:
+            resp = await client.post("/query", json={"seed_url": "test.com"})
+    assert resp.status_code == 200
+    assert resp.json()[0]["job_id"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_storage_endpoint_returns_file_when_found():
+    with (
+        patch("crawl_tool.engine.service.StorageSettings") as mock_settings_cls,
+        patch("crawl_tool.engine.service.get_result", new_callable=AsyncMock) as mock_get,
+    ):
+        mock_settings_cls.from_env.return_value = MagicMock(enabled=True)
+        mock_get.return_value = b'{"meta": {}, "pages": []}'
+        app = create_app()
+        async with _client(app) as client:
+            resp = await client.get("/storage/abc123")
+    assert resp.status_code == 200
+    assert b'"meta"' in resp.content
+
+
+@pytest.mark.asyncio
+async def test_storage_endpoint_returns_404_when_not_found():
+    with (
+        patch("crawl_tool.engine.service.StorageSettings") as mock_settings_cls,
+        patch("crawl_tool.engine.service.get_result", new_callable=AsyncMock) as mock_get,
+    ):
+        mock_settings_cls.from_env.return_value = MagicMock(enabled=True)
+        mock_get.return_value = None
+        app = create_app()
+        async with _client(app) as client:
+            resp = await client.get("/storage/missing")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_run_job_uploads_to_storage_on_success():
+    with (
+        patch("crawl_tool.engine.service.execute", new_callable=AsyncMock) as mock_execute,
+        patch("crawl_tool.engine.service.StorageSettings") as mock_settings_cls,
+        patch("crawl_tool.engine.service.put_result", new_callable=AsyncMock) as mock_put,
+    ):
+        mock_execute.return_value = _PAYLOAD
+        mock_settings_cls.from_env.return_value = MagicMock(enabled=True)
+        app = create_app()
+        async with _client(app) as client:
+            resp = await client.post("/crawl", json={"seed_url": "https://example.com"})
+            job_id = resp.json()["job_id"]
+            await _poll_until_terminal(client, job_id)
+    mock_put.assert_awaited_once()
+    call_args = mock_put.call_args
+    assert call_args.args[0] == job_id

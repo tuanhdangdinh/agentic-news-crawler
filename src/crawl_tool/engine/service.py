@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from crawl_tool.engine.agent import CrawlState
 from crawl_tool.engine.contract import (
+    CrawlQuery,
     CrawlRequest,
+    CrawlSummary,
     JobCreated,
     JobProgress,
     JobResult,
@@ -21,7 +23,9 @@ from crawl_tool.engine.contract import (
 )
 from crawl_tool.engine.output import serialize_payload
 from crawl_tool.engine.prompt_parser import PromptParseError, parse_crawl_prompt
+from crawl_tool.engine.query import run_query
 from crawl_tool.engine.runner import execute
+from crawl_tool.engine.storage import StorageSettings, get_result, put_result
 
 logger = structlog.get_logger(__name__)
 
@@ -82,6 +86,7 @@ def create_app() -> FastAPI:
 
     jobs: dict[str, Job] = {}
     run_lock = asyncio.Lock()
+    storage_settings = StorageSettings.from_env()
 
     def purge_expired() -> None:
         cutoff = _monotonic() - JOB_TTL_SECONDS
@@ -99,6 +104,11 @@ def create_app() -> FastAPI:
             try:
                 job.payload = await execute(job.request, job.state)
                 job.status = JobStatus.done
+                if storage_settings.enabled:
+                    try:
+                        await put_result(job_id, job.payload, storage_settings)
+                    except Exception as upload_exc:  # noqa: BLE001
+                        logger.warning("storage upload failed", job_id=job_id, error=str(upload_exc))
             except Exception as exc:  # noqa: BLE001
                 job.error = str(exc)
                 job.status = JobStatus.error
@@ -159,7 +169,7 @@ def create_app() -> FastAPI:
         return job.to_result()
 
     @app.get("/crawl/{job_id}/result")
-    async def get_result(job_id: str, format: str = "json") -> Response:
+    async def get_crawl_result(job_id: str, format: str = "json") -> Response:
         """Download a completed crawl result as JSON or JSONL.
 
         Args:
@@ -176,6 +186,38 @@ def create_app() -> FastAPI:
         body = serialize_payload(job.payload, fmt)
         media_type = "application/x-ndjson" if fmt == "jsonl" else "application/json"
         filename = f"crawl-{job_id}.{fmt}"
+        return Response(
+            content=body,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.post("/query")
+    async def query_history(query: CrawlQuery) -> list[CrawlSummary]:
+        """Query stored crawl history in MinIO using structured filters."""
+        if not storage_settings.enabled:
+            raise HTTPException(status_code=503, detail="storage not configured")
+        return await run_query(query, storage_settings)
+
+    @app.get("/storage/{job_id}")
+    async def get_stored_result(job_id: str, format: str = "json") -> Response:
+        """Fetch a completed crawl result directly from object storage."""
+        if not storage_settings.enabled:
+            raise HTTPException(status_code=503, detail="storage not configured")
+        raw = await get_result(job_id, storage_settings)
+        if raw is None:
+            raise HTTPException(status_code=404, detail="result not found in storage")
+        if format == "jsonl":
+            import json as _json
+
+            payload = _json.loads(raw)
+            body = serialize_payload(payload, "jsonl").encode()
+            media_type = "application/x-ndjson"
+            filename = f"crawl-{job_id}.jsonl"
+        else:
+            body = raw
+            media_type = "application/json"
+            filename = f"crawl-{job_id}.json"
         return Response(
             content=body,
             media_type=media_type,
