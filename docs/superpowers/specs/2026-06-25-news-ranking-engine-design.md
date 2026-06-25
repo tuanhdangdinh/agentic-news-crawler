@@ -6,6 +6,7 @@
 
 - Initial draft: unify impact and briefing into one ranking engine behind a general `--prompt`.
 - Rev 2: bound rank-mode fanout (rank-specific `max_pages`, job-wide article cap, scoring concurrency limit), account scoring tokens, match article pages on `final_url`, split `filtered_count` into weak vs error counts, constrain `intent` to an enum.
+- Rev 3: round-robin the job-wide article cap so it draws evenly across sources (source-order truncation starved later sources), pin rank-mode `max_depth=1`, record cross-source duplicates as an accepted phase-1 limitation.
 
 ---
 
@@ -239,15 +240,19 @@ Significance mode:
 - **Fanout is bounded on three axes.** Without caps, N sources × `max_pages=100` × a scoring call each
   is unbounded cost and concurrency:
   - **Per-source pages:** rank config uses `RANK_MAX_PAGES` (default 25), not the crawl default of 100.
-  - **Job-wide articles scored:** after concatenation, the article list is truncated to
-    `RANK_MAX_ARTICLES` (default 60) before scoring, so total scoring calls have a hard ceiling
-    regardless of source count.
+  - **Job-wide articles scored:** the per-source article lists are **interleaved round-robin**, then
+    truncated to `RANK_MAX_ARTICLES` (default 60). Round-robin (not source-order concatenation) is
+    required: a naive `[...][:RANK_MAX_ARTICLES]` flattens in source order, so the first sources fill
+    the quota and later sources contribute zero — which defeats the whole point of surveying across
+    sources. Interleaving makes the global cap draw evenly from every source.
   - **Scoring concurrency:** the `Semaphore` from `ranker.py` (`SCORING_CONCURRENCY`, default 8).
   - Per-source token budget still applies inside each `run_agent`; these caps bound the rank job *as a
     whole*, which the per-`CrawlState` budget cannot.
 - Each per-source `run_agent` uses a synthesized rank config: a goal of "collect today's economy /
   finance article pages", the resolved `date_filter` (defaulting to today for `rank`), `RANK_MAX_PAGES`,
-  and **no per-page extraction** (scoring happens after the crawl, not during).
+  **`max_depth=1`** (articles live one hop below a section landing page; depth 0 would fetch only the
+  landing pages and find no articles), and **no per-page extraction** (scoring happens after the crawl,
+  not during).
 - Article pages to score are the pages whose **`final_url`** is in a source's `state.article_pages`
   — `run_agent` records `page.final_url` there (`agent.py:541`), so matching on `page.url` would drop
   any article that redirected.
@@ -276,10 +281,13 @@ async def _execute_rank(request, state, proxy_rotator) -> dict:
         run_agent(src, rank_config, state=st, proxy_rotator=proxy_rotator)
         for src, st in zip(sources, states, strict=True)
     ])
-    # Match on final_url (run_agent records final_url in article_pages), then cap job-wide.
-    articles = [
-        p for st in states for p in st.pages if p.final_url in st.article_pages
-    ][:RANK_MAX_ARTICLES]
+    # Match on final_url (run_agent records final_url in article_pages).
+    per_source = [
+        [p for p in st.pages if p.final_url in st.article_pages] for st in states
+    ]
+    # Round-robin interleave so the job-wide cap draws evenly from every source,
+    # not just the first ones (source-order truncation would starve later sources).
+    articles = list(roundrobin(per_source))[:RANK_MAX_ARTICLES]
 
     mode = "impact" if request.targets else "significance"
     client = anthropic.AsyncAnthropic()
@@ -400,7 +408,8 @@ Mock `crawl_tool.engine.ranker.anthropic.AsyncAnthropic`, matching `test_extract
 
 12. `intent == "rank"` dispatches `_execute_rank`, gathers `run_agent` per source, scores article pages
     (matched on `final_url`), returns a `ranked_articles` payload (all collaborators mocked).
-13. Job-wide cap: more than `RANK_MAX_ARTICLES` article pages collected → only `RANK_MAX_ARTICLES` scored.
+13. Job-wide cap with round-robin: 4 sources × 25 articles, `RANK_MAX_ARTICLES=60` → 60 scored, drawn
+    evenly across sources (every source contributes, none is starved by source-order truncation).
 14. Redirected article (`page.url != page.final_url`, `final_url` in `article_pages`) is still scored.
 15. Payload `total_*_tokens` equals crawl totals plus summed `score_article` usage.
 16. `intent == "crawl"` path unchanged.
@@ -419,6 +428,9 @@ Mock `crawl_tool.engine.ranker.anthropic.AsyncAnthropic`, matching `test_extract
   phase 2.
 - **Prominence/clustering for significance** — phase 1 scores each article in isolation. Cross-source
   "this is hot because everyone leads with it" is phase 2.
+- **Deduplication of the same story across sources** — phase 1 will show the same wire story from
+  multiple sources as multiple ranked entries (likely clustered near the top). This is an **accepted**
+  phase-1 limitation, folded into the clustering work above; dedup is deliberately not added now.
 - **A separate per-article fact-extraction stage** — deliberately removed; the scorer reads markdown and
   emits the final record. The ranked output consumes no raw `extractor`-style facts, so a separate
   extraction call would produce unused data.
