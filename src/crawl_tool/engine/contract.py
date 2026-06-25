@@ -86,3 +86,25 @@ class JobResult(BaseModel):
     progress: JobProgress = Field(default_factory=JobProgress)
     payload: dict | None = None
     error: str | None = None
+
+
+class CrawlQuery(BaseModel):
+    """Structured filter for querying stored crawl history."""
+
+    seed_url: str = ""
+    goal: str = ""
+    date_from: str = ""
+    date_to: str = ""
+    limit: int = Field(default=20, ge=1, le=500)
+
+
+class CrawlSummary(BaseModel):
+    """Lightweight metadata record returned from a history query."""
+
+    job_id: str
+    seed_url: str
+    goal: str
+    generated_at: str
+    total_pages: int
+    successful: int
+    failed: int
