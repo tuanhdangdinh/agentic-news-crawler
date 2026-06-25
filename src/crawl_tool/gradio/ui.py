@@ -13,7 +13,13 @@ from uuid import uuid4
 import gradio as gr
 import httpx
 
-from crawl_tool.gradio.client import download_result, poll_until_done, start_crawl
+from crawl_tool.gradio.client import (
+    download_from_storage,
+    download_result,
+    poll_until_done,
+    query_history,
+    start_crawl,
+)
 from crawl_tool.gradio.ui_results import (
     build_result_table,
     render_result_table_html,
@@ -844,6 +850,33 @@ def build_demo(initial_payload: dict | None = None) -> gr.Blocks:
             with gr.TabItem("Raw JSON"):
                 json_preview = gr.JSON(label="Raw payload", value=_init_payload or None, open=True)
 
+            with gr.TabItem("History"):
+                with gr.Row():
+                    hist_seed_url = gr.Textbox(
+                        label="Seed URL", placeholder="e.g. vietnamnet.vn", scale=2
+                    )
+                    hist_goal = gr.Textbox(
+                        label="Goal", placeholder="e.g. finance news", scale=2
+                    )
+                    hist_limit = gr.Number(label="Limit", value=20, precision=0, scale=1)
+                with gr.Row():
+                    hist_date_from = gr.Textbox(label="Date from (YYYY-MM-DD)", scale=1)
+                    hist_date_to = gr.Textbox(label="Date to (YYYY-MM-DD)", scale=1)
+                    hist_search_btn = gr.Button("Search", variant="primary", scale=1)
+                hist_msg = gr.Markdown("")
+                hist_table = gr.Dataframe(
+                    headers=["job_id", "seed_url", "goal", "generated_at", "total_pages"],
+                    label="Past Crawl Runs",
+                    interactive=False,
+                )
+                with gr.Row():
+                    hist_job_id_input = gr.Textbox(
+                        label="Job ID to download", placeholder="Paste job_id from table above"
+                    )
+                    hist_fmt = gr.Radio(["json", "jsonl"], value="json", label="Format")
+                    hist_download_btn = gr.Button("Download")
+                hist_file = gr.File(label="Downloaded result", visible=False)
+
         def on_mode_change(mode: str, payload: dict, extraction_requested: bool) -> str:
             table = build_result_table(payload, mode, extraction_requested=extraction_requested)
             return render_result_table_html(table)
@@ -875,6 +908,48 @@ def build_demo(initial_payload: dict | None = None) -> gr.Blocks:
             fn=on_mode_change,
             inputs=[mode_radio, payload_state, extraction_state],
             outputs=[table_html],
+        )
+
+        async def _search_history(seed_url, goal, date_from, date_to, limit):
+            result = await query_history({
+                "seed_url": seed_url or "",
+                "goal": goal or "",
+                "date_from": date_from or "",
+                "date_to": date_to or "",
+                "limit": int(limit or 20),
+            })
+            if "error" in result:
+                return [], f"**Error:** {result['error']}"
+            rows = [
+                [r["job_id"], r["seed_url"], r["goal"], r["generated_at"], r["total_pages"]]
+                for r in result.get("results", [])
+            ]
+            msg = f"{len(rows)} result(s) found." if rows else "No results found."
+            return rows, msg
+
+        hist_search_btn.click(
+            _search_history,
+            inputs=[hist_seed_url, hist_goal, hist_date_from, hist_date_to, hist_limit],
+            outputs=[hist_table, hist_msg],
+        )
+
+        async def _download_history(job_id, fmt):
+            if not job_id:
+                return gr.update(visible=False)
+            import tempfile
+            data = await download_from_storage(job_id.strip(), fmt)
+            suffix = f".{fmt}" if fmt == "jsonl" else ".json"
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix=suffix, prefix=f"crawl-{job_id}-"
+            ) as tmp:
+                tmp.write(data)
+                tmp_name = tmp.name
+            return gr.update(value=tmp_name, visible=True)
+
+        hist_download_btn.click(
+            _download_history,
+            inputs=[hist_job_id_input, hist_fmt],
+            outputs=[hist_file],
         )
 
     return demo

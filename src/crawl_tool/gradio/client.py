@@ -91,3 +91,52 @@ async def download_result(
         )
         response.raise_for_status()
         return response.content
+
+
+async def query_history(
+    filters: dict,
+    *,
+    base_url: str = ENGINE_URL,
+) -> dict:
+    """Query crawl history via the engine's /query endpoint.
+
+    Args:
+        filters: CrawlQuery fields as a plain dict.
+        base_url: Crawl engine base URL.
+
+    Returns:
+        Dict with "results" key (list of CrawlSummary dicts) or "error" key on failure.
+    """
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as http:
+        try:
+            response = await http.post("/query", json=filters)
+            if response.status_code == 503:
+                return {"error": "Object storage is not configured on the engine."}
+            response.raise_for_status()
+            return {"results": response.json()}
+        except httpx.HTTPStatusError as exc:
+            return {"error": f"Query failed: {exc.response.status_code}"}
+        except httpx.RequestError as exc:
+            return {"error": f"Engine unreachable: {exc}"}
+
+
+async def download_from_storage(
+    job_id: str,
+    fmt: str = "json",
+    *,
+    base_url: str = ENGINE_URL,
+) -> bytes:
+    """Download a result from object storage.
+
+    Args:
+        job_id: Crawl job identifier.
+        fmt: Requested result format ("json" or "jsonl").
+        base_url: Crawl engine base URL.
+
+    Returns:
+        Serialized result bytes.
+    """
+    async with httpx.AsyncClient(base_url=base_url, timeout=60.0) as http:
+        response = await http.get(f"/storage/{job_id}", params={"format": fmt})
+        response.raise_for_status()
+        return response.content
