@@ -114,3 +114,21 @@ def test_build_parser_override_flags_default_to_none():
     assert args.same_domain is None
     assert args.include_pattern is None
     assert args.exclude_pattern is None
+
+
+def test_build_query_parser_accepts_all_flags():
+    from crawl_tool.engine.cli import build_query_parser
+    args = build_query_parser().parse_args([
+        "--seed-url", "vietnamnet.vn",
+        "--goal", "finance",
+        "--date-from", "2026-06-01",
+        "--date-to", "2026-06-30",
+        "--limit", "5",
+        "--engine-url", "http://myhost:8000",
+    ])
+    assert args.seed_url == "vietnamnet.vn"
+    assert args.goal == "finance"
+    assert args.date_from == "2026-06-01"
+    assert args.date_to == "2026-06-30"
+    assert args.limit == 5
+    assert args.engine_url == "http://myhost:8000"

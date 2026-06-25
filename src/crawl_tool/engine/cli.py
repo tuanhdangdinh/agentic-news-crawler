@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import sys
 from pathlib import Path
 
 import structlog
@@ -34,10 +36,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--prompt",
         default="",
-        help="One-shot natural-language crawl description; fills fields not given explicitly",
+        help=(
+            "One-shot description of the entire crawl; an LLM call infers --goal, "
+            "--max-depth, --date-filter, etc. Any flag passed explicitly overrides "
+            "what the prompt inferred."
+        ),
     )
-    parser.add_argument("--goal", default=None, help="Natural-language crawl goal")
-    parser.add_argument("--extract-prompt", default=None, help="What to extract from each page")
+    parser.add_argument(
+        "--goal",
+        default=None,
+        help=(
+            "Natural-language crawl goal; steers which links to follow and when to "
+            "stop. Inferred from --prompt if omitted."
+        ),
+    )
+    parser.add_argument(
+        "--extract-prompt",
+        default=None,
+        help=(
+            "What to extract from each page; also used to infer a schema when "
+            "--extract-schema is not given. Inferred from --prompt if omitted."
+        ),
+    )
     parser.add_argument("--extract-schema", default="", help="Path to JSON Schema file")
     parser.add_argument(
         "--max-depth",
@@ -177,11 +197,89 @@ async def run(args: argparse.Namespace) -> None:
     )
 
 
+def build_query_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the query subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="crawl-tool query",
+        description="Query stored crawl history.",
+    )
+    parser.add_argument("--seed-url", default="", help="Filter by seed URL substring")
+    parser.add_argument("--goal", default="", help="Filter by goal substring")
+    parser.add_argument("--date-from", default="", metavar="DATE", help="From date (YYYY-MM-DD)")
+    parser.add_argument("--date-to", default="", metavar="DATE", help="To date (YYYY-MM-DD)")
+    parser.add_argument("--limit", type=int, default=20, help="Maximum results (default: 20)")
+    parser.add_argument(
+        "--engine-url",
+        default=os.environ.get("ENGINE_URL", "http://localhost:8000"),
+        help="Engine base URL",
+    )
+    return parser
+
+
+async def run_query_cmd(args: argparse.Namespace) -> None:
+    """Call POST /query and print results as an ASCII table."""
+    import httpx
+
+    filters = {
+        "seed_url": args.seed_url,
+        "goal": args.goal,
+        "date_from": args.date_from,
+        "date_to": args.date_to,
+        "limit": args.limit,
+    }
+    async with httpx.AsyncClient(base_url=args.engine_url, timeout=30.0) as client:
+        try:
+            resp = await client.post("/query", json=filters)
+        except httpx.RequestError as exc:
+            print(f"error: engine unreachable — {exc}")
+            return
+    if resp.status_code == 503:
+        print("error: object storage is not configured on the engine")
+        return
+    if resp.status_code != 200:
+        print(f"error: engine returned {resp.status_code}")
+        return
+
+    results = resp.json()
+    if not results:
+        print("no results found")
+        return
+
+    col_widths = {
+        "job_id": 32,
+        "seed_url": 30,
+        "goal": 24,
+        "generated_at": 25,
+        "total_pages": 11,
+    }
+    header = (
+        f"{'job_id':<{col_widths['job_id']}} "
+        f"{'seed_url':<{col_widths['seed_url']}} "
+        f"{'goal':<{col_widths['goal']}} "
+        f"{'generated_at':<{col_widths['generated_at']}} "
+        f"{'total_pages':<{col_widths['total_pages']}}"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in results:
+        print(
+            f"{r['job_id']:<{col_widths['job_id']}} "
+            f"{str(r['seed_url'])[:col_widths['seed_url']]:<{col_widths['seed_url']}} "
+            f"{str(r['goal'])[:col_widths['goal']]:<{col_widths['goal']}} "
+            f"{str(r['generated_at'])[:col_widths['generated_at']]:<{col_widths['generated_at']}} "
+            f"{r['total_pages']:<{col_widths['total_pages']}}"
+        )
+
+
 def main() -> None:
-    """Parse CLI arguments and run the async crawler entry point."""
-    parser = build_parser()
-    args = parser.parse_args()
-    asyncio.run(run(args))
+    """Parse CLI arguments and dispatch to the appropriate command."""
+    if len(sys.argv) > 1 and sys.argv[1] == "query":
+        query_args = build_query_parser().parse_args(sys.argv[2:])
+        asyncio.run(run_query_cmd(query_args))
+    else:
+        parser = build_parser()
+        args = parser.parse_args()
+        asyncio.run(run(args))
 
 
 if __name__ == "__main__":
