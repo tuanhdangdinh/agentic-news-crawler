@@ -63,10 +63,19 @@ _PAYLOAD_B = {
 
 @pytest.fixture(scope="module")
 def minio_settings():
-    """Start a MinIO container and yield a StorageSettings pointing at it."""
-    with MinioContainer(bucket_name=BUCKET) as minio:
+    """Start a MinIO container, create the test bucket, and yield StorageSettings."""
+    from minio import Minio
+
+    with MinioContainer() as minio:
         host = minio.get_container_host_ip()
         port = minio.get_exposed_port(9000)
+        client = Minio(
+            f"{host}:{port}",
+            access_key=minio.access_key,
+            secret_key=minio.secret_key,
+            secure=False,
+        )
+        client.make_bucket(BUCKET)
         yield StorageSettings(
             endpoint=f"{host}:{port}",
             access_key=minio.access_key,
@@ -92,7 +101,14 @@ async def test_put_then_get_roundtrip(minio_settings):
 async def test_put_does_not_mutate_original_payload(minio_settings):
     """put_result injects job_id into storage without modifying the caller's dict."""
     payload = {
-        "meta": {"seed_url": "https://example.com", "total_pages": 1},
+        "meta": {
+            "seed_url": "https://example.com",
+            "goal": "test goal",
+            "generated_at": "2026-06-25T00:00:00Z",
+            "total_pages": 1,
+            "successful": 1,
+            "failed": 0,
+        },
         "pages": [],
     }
     await put_result("job-mut-001", payload, minio_settings)
