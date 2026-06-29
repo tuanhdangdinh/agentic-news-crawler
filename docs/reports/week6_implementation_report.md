@@ -1,4 +1,4 @@
-# Week 6 Implementation Report — Testing, Docs, and Handover
+# Week 6 Implementation Report — Testing, Docs, Handover, and Object Storage
 
 **Prepared:** 2026-06-09
 
@@ -7,6 +7,7 @@
 - Rev 2 (2026-06-09): recorded the live integration result and corrected the standalone fetch test targets
 - Rev 3 (2026-06-10): strengthened acceptance assertions, documented the Gradio and schema-registry paths, and recorded fresh verification
 - Rev 4 (2026-06-12): plan-compliance review — added Plan Deviations section; implemented depth ceiling, identifying User-Agent, and query-parameter canonicalization
+- Rev 5 (2026-06-29): Added Object Storage section — MinIO storage module, DuckDB query layer, `/query` and `/storage` API endpoints, Gradio History tab, CLI `query` subcommand, and integration tests
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/17b19cd)
 
@@ -165,6 +166,99 @@ def _order_log_fields(
 |---|---|---|
 | `--css-selector` | `""` | CSS selector to scope extraction, e.g. `"article.main-content"` |
 | `--max-chars` | `0` | Truncate page markdown before sending to Claude; 0 = no limit |
+
+---
+
+## Object Storage
+
+### Overview
+
+Crawl results are now automatically persisted to MinIO (S3-compatible object storage) on job completion. A DuckDB-based query layer reads directly from the S3 bucket, enabling history search without a relational database. The Gradio UI gains a History tab for browsing and downloading past runs.
+
+### Design Decisions
+
+- **MinIO as the storage backend** — S3-compatible API means the same client works against AWS S3 in production without code changes; `StorageSettings.enabled` guards every call so the system degrades gracefully when `MINIO_ENDPOINT` is unset
+- **Async wrappers over sync MinIO client** — `asyncio.to_thread` wraps `_put_result_sync` and `_get_result_sync` to keep the FastAPI event loop unblocked; the underlying Minio SDK is synchronous
+- **DuckDB `httpfs` for query** — DuckDB reads `s3://bucket/crawl-*.json` directly over the S3 API using the `httpfs` extension; no intermediate download or local index required; `IOException` is caught and returns `[]` when the bucket is empty
+- **`job_id` injected into stored `meta`** — `put_result` merges `job_id` into a copy of the payload's `meta` dict before upload; the original caller payload is never mutated, so in-memory references stay consistent
+- **Auto-upload on job completion** — `service.py` calls `put_result` after the job status transitions to `done`; failures are logged at WARNING and do not affect the HTTP response returned to the UI
+- **`/query` and `/storage/{job_id}` return 503 when storage is disabled** — explicit error instead of silent no-op; callers can distinguish "not configured" from "not found"
+
+### Module: `engine/storage.py`
+
+```text
+StorageSettings.from_env()  →  reads MINIO_* env vars
+StorageSettings.enabled     →  True iff MINIO_ENDPOINT is set
+put_result(job_id, payload, settings)  →  upload crawl-{job_id}.json
+get_result(job_id, settings)           →  bytes | None
+```
+
+- `put_result` creates the bucket if it does not exist
+- `get_result` returns `None` on `NoSuchKey`; re-raises all other `S3Error` variants
+
+### Module: `engine/query.py`
+
+```text
+run_query(query: CrawlQuery, settings: StorageSettings) → list[CrawlSummary]
+```
+
+- Opens an in-process DuckDB connection, installs and loads `httpfs`, configures S3 credentials with parameterized `SET` statements
+- Builds a `SELECT` over `read_json('s3://bucket/crawl-*.json')` with optional `WHERE` clauses for `seed_url`, `goal`, `date_from`, and `date_to`
+- All filters are substring (`LIKE '%?%'`) or range comparisons; `LIMIT` is always applied
+- Runs synchronously inside `asyncio.to_thread`
+
+### Module: `engine/contract.py` Additions
+
+| Model | Fields | Description |
+|---|---|---|
+| `CrawlQuery` | `seed_url`, `goal`, `date_from`, `date_to`, `limit` (1–500) | Structured filter for history queries |
+| `CrawlSummary` | `job_id`, `seed_url`, `goal`, `generated_at`, `total_pages`, `successful`, `failed` | Lightweight record returned per matching crawl |
+
+### Service Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/query` | `POST` | Accept `CrawlQuery` body, return `list[CrawlSummary]`; 503 if storage disabled |
+| `/storage/{job_id}` | `GET` | Fetch raw JSON bytes for a completed job from MinIO; 404 if not found, 503 if disabled |
+
+### Gradio History Tab
+
+The History tab in the UI (added to `src/crawl_tool/gradio/ui.py`) provides:
+
+- **Search form** — seed URL substring, goal substring, date range, and result limit
+- **Results dataframe** — columns: `job_id`, `seed_url`, `goal`, `generated_at`, `total_pages`
+- **Download form** — paste a `job_id`, choose `json` or `jsonl`, click Download; the result is fetched from `/storage/{job_id}` and offered as a file download
+
+The Gradio client (`client.py`) exposes `query_history(filters)` and `download_result(job_id, fmt)` which call `/query` and `/storage/{job_id}` respectively over the existing HTTP session.
+
+### CLI `query` Subcommand
+
+```bash
+crawl-tool query --seed-url cafef.vn --goal "finance" --date-from 2026-06-01 --limit 10
+```
+
+- Added to `engine/cli.py` as a `query` subcommand alongside the existing `crawl` subcommand
+- Reads `MINIO_*` env vars via `StorageSettings.from_env()`; prints a warning and exits when storage is not configured
+- Outputs one JSON object per result, one per line (JSONL)
+
+### Integration Tests
+
+`tests/engine/test_storage_query_integration.py` — marked `@pytest.mark.integration`, skipped when Docker is unavailable
+
+| Test | What is covered |
+|---|---|
+| `test_put_then_get_roundtrip` | `put_result` stores file; `get_result` retrieves identical bytes with injected `job_id` |
+| `test_put_does_not_mutate_original_payload` | Caller's payload dict is not modified |
+| `test_get_result_returns_none_for_missing_key` | `get_result` returns `None` for unknown `job_id` |
+| `test_run_query_returns_empty_on_fresh_bucket` | `run_query` returns `[]` on an empty bucket without raising |
+| `test_run_query_returns_uploaded_results` | Both uploaded jobs appear in unfiltered query |
+| `test_run_query_filters_by_seed_url` | Substring filter on `seed_url` excludes non-matching records |
+| `test_run_query_filters_by_date_range` | `date_from`/`date_to` excludes records outside the range |
+| `test_run_query_summary_fields_match_payload` | All `CrawlSummary` fields match the stored payload `meta` |
+
+Tests use `testcontainers.minio.MinioContainer` to spin up a real MinIO instance per module scope. A module-scoped `minio_settings` fixture creates the test bucket and yields `StorageSettings`.
+
+Unit tests in `tests/engine/test_storage.py` cover `StorageSettings`, `_put_result_sync`, and `_get_result_sync` with mocked Minio clients.
 
 ---
 

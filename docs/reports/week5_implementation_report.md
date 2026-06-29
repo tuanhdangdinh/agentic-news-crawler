@@ -1,4 +1,4 @@
-# Week 5 Implementation Report — Date Filtering, Retry Policy, and Test Coverage
+# Week 5 Implementation Report — Date Filtering, Retry Policy, Test Coverage, and Docker Packaging
 
 **Prepared:** 2026-06-04
 
@@ -8,6 +8,7 @@
 - Rev 3 (2026-06-09): Vietnamese URL century assumption resolved — `_resolve_2digit_year` prefers 2000s, falls back to 1900s, returns `None` when neither fits the plausible news window; 4 new tests added
 - Rev 4 (2026-06-09): Added missing `src/logging_config.py` section (Week 5 deliverable not yet documented); updated test counts to reflect delivery state; updated Week 6 entry criteria
 - Rev 5 (2026-06-10): Corrected three-retry semantics, inclusive rolling ranges, full `Retry-After` parsing, and structured summary logging
+- Rev 6 (2026-06-29): Added Docker Packaging section — Dockerfile.engine, Dockerfile.gradio, and docker-compose three-service stack
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/3e870a4f93809ebaeae9f3aae1dc91809faf90d4)
 
@@ -250,6 +251,82 @@ if date_range is not None and _is_article_page(page):
 | `test_output_write_jsonl.py` | 3 | `write_results` JSONL format — one JSON object per line |
 | `test_output_write_results.py` | 4 | `write_results` — no output path, format dispatch |
 | `test_render.py` | 6 | `render` — system and user templates, missing variable raises, missing template raises |
+
+---
+
+## Docker Packaging
+
+### Design Decisions
+
+- **Three-service compose stack** — `engine`, `ui`, and `minio` run as separate containers; the UI never imports from the engine package directly, so the process boundary is enforced at the network level
+- **Playwright base for the engine** — `mcr.microsoft.com/playwright/python:v1.60.0-noble` provides the Chromium runtime required by Crawl4AI without a manual browser install step
+- **Slim base for the Gradio UI** — `python:3.11-slim` is sufficient because the UI makes HTTP calls to the engine; it does not run any browser
+- **Build context is the repo root** — both Dockerfiles set `context: ..` in compose so `pip install .` installs the `crawl_tool` package from the root `pyproject.toml`
+
+### `docker/Dockerfile.engine`
+
+```dockerfile
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
+
+WORKDIR /app
+COPY . /app
+RUN pip install --no-cache-dir .
+
+EXPOSE 8000
+CMD ["uvicorn", "crawl_tool.engine.service:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+- Starts from the official Microsoft Playwright image which includes Chromium, Firefox, and WebKit drivers
+- Installs the project package with all dependencies declared in `pyproject.toml`
+- Exposes port 8000 and starts the FastAPI service with `uvicorn`
+
+### `docker/Dockerfile.gradio`
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY . /app
+RUN pip install --no-cache-dir .
+
+EXPOSE 7860
+CMD ["python", "-m", "crawl_tool.gradio.app"]
+```
+
+- Slim base sufficient for the HTTP-only UI process
+- Exposes port 7860 (Gradio default)
+
+### `docker/docker-compose.yml`
+
+| Service | Image | Port(s) | Depends on |
+|---|---|---|---|
+| `engine` | Built from `Dockerfile.engine` | `8000` | `minio` |
+| `ui` | Built from `Dockerfile.gradio` | `7860` | `engine` |
+| `minio` | `minio/minio:latest` | `9000` (S3 API), `9001` (console) | — |
+
+**Environment variables consumed by the engine:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Required | Claude API key |
+| `CORS_ALLOW_ORIGINS` | `*` | FastAPI CORS allowed origins |
+| `MINIO_ENDPOINT` | `minio:9000` | Internal compose hostname for object storage |
+| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO credentials |
+| `MINIO_SECRET_KEY` | `minioadmin` | MinIO credentials |
+| `MINIO_BUCKET` | `crawl-results` | Bucket name for crawl result storage |
+| `MINIO_SECURE` | `false` | TLS flag; disabled inside the compose network |
+
+MinIO data is persisted to a named volume `minio_data` so crawl results survive container restarts.
+
+### Running the Stack
+
+```bash
+ANTHROPIC_API_KEY=sk-... docker compose -f docker/docker-compose.yml up --build
+```
+
+- Engine API available at `http://localhost:8000`
+- Gradio UI available at `http://localhost:7860`
+- MinIO console available at `http://localhost:9001` (credentials: `minioadmin` / `minioadmin`)
 
 ---
 
