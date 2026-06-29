@@ -10,7 +10,7 @@
 - Rev 5 (2026-06-29): Added Object Storage section — MinIO storage module, DuckDB query layer, `/query` and `/storage` API endpoints, Gradio History tab, CLI `query` subcommand, and integration tests
 - Rev 6 (2026-06-29): Corrected current package paths, storage UI/client names, CLI query behavior, dependency changes, and User-Agent contact
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/7ff35beb5969fca4745cc9a68452df354eaede3a)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/ca1b513903fee82043938d39444cd832a080233c)
 
 ---
 
