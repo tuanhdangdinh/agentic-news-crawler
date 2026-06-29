@@ -108,3 +108,26 @@ class CrawlSummary(BaseModel):
     total_pages: int
     successful: int
     failed: int
+
+
+class ParseRequest(BaseModel):
+    """Body for POST /parse."""
+
+    prompt: str
+
+
+class StorageObject(BaseModel):
+    """One object in the MinIO bucket."""
+
+    job_id: str
+    size_bytes: int
+    last_modified: str
+
+
+class StorageOverview(BaseModel):
+    """Response for GET /storage."""
+
+    total_files: int
+    total_size_bytes: int
+    last_modified: str | None
+    objects: list[StorageObject]

@@ -71,3 +71,29 @@ def test_job_result_defaults_to_zero_progress():
     result = JobResult(status=JobStatus.running)
     assert result.progress == JobProgress(pages_collected=0)
     assert result.payload is None
+
+
+def test_parse_request_requires_prompt():
+    from pydantic import ValidationError
+
+    from crawl_tool.engine.contract import ParseRequest
+
+    with pytest.raises(ValidationError):
+        ParseRequest()
+
+
+def test_parse_request_accepts_prompt():
+    from crawl_tool.engine.contract import ParseRequest
+
+    req = ParseRequest(prompt="get news from cafef.vn")
+    assert req.prompt == "get news from cafef.vn"
+
+
+def test_storage_overview_defaults():
+    from crawl_tool.engine.contract import StorageOverview
+
+    ov = StorageOverview(
+        total_files=0, total_size_bytes=0, last_modified=None, objects=[]
+    )
+    assert ov.total_files == 0
+    assert ov.objects == []
