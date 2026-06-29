@@ -8,6 +8,7 @@
 - Rev 3 (2026-06-10): strengthened acceptance assertions, documented the Gradio and schema-registry paths, and recorded fresh verification
 - Rev 4 (2026-06-12): plan-compliance review — added Plan Deviations section; implemented depth ceiling, identifying User-Agent, and query-parameter canonicalization
 - Rev 5 (2026-06-29): Added Object Storage section — MinIO storage module, DuckDB query layer, `/query` and `/storage` API endpoints, Gradio History tab, CLI `query` subcommand, and integration tests
+- Rev 6 (2026-06-29): Corrected current package paths, storage UI/client names, CLI query behavior, dependency changes, and User-Agent contact
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/741b97d397db7a62236aeb47afedcb288518a6a5)
 
@@ -20,37 +21,45 @@
 - Completes the intern plan's Week 6 contract: integration test suite on three real Vietnamese economy sites, architecture document, and README CLI reference update
 - Adds `--css-selector` flag — the outstanding Week 5 entry criterion; wired end-to-end through CLI → `AgentConfig` → `fetch_page`
 - Adds `--max-chars` to cap per-page markdown sent to Claude, providing direct control over per-turn token cost
-- Migrates all remaining `print()` calls to structured `structlog` events and adds stable JSON field ordering
+- Migrates crawl-path `print()` calls to structured `structlog` events and adds stable JSON field ordering
 
 ### What Changed From Week 5
 
-- `tests/test_integration.py` — new file; 11 end-to-end tests across CafeF, VnEconomy, and VietnamPlus covering crawl completion, depth correctness, deduplication, same-domain filter, date filter, and extraction accuracy; marked `@pytest.mark.integration` and excluded from the default `pytest` run
+- `tests/engine/test_integration.py` — new file; 11 end-to-end tests across CafeF, VnEconomy, and VietnamPlus covering crawl completion, depth correctness, deduplication, same-domain filter, date filter, and extraction accuracy; marked `@pytest.mark.integration` and excluded from the default `pytest` run
 - `docs/architecture.md` — new file; module diagram, data flow diagram, key design decisions, `AgentConfig` and `CrawlState` field references, date detection priority order, known limitations
 - `README.md` — project structure updated to reflect current layout; `--css-selector` and `--max-chars` added to CLI reference
-- `src/agent.py` — `AgentConfig` gains `css_selector` and `max_chars`; `_agent_turn` truncates markdown before rendering; `run_agent` forwards `css_selector` to `fetch_page`; all `print()` calls replaced with `logger` events; docstrings added to public functions
-- `src/logging_config.py` — `_order_log_fields` processor added; `timestamp/level/logger/event` always first, remaining keys alphabetical
-- `main.py` — `--css-selector` and `--max-chars` flags added; all `print()` calls replaced with `logger` events; docstrings added
+- `src/crawl_tool/engine/agent.py` — `AgentConfig` gains `css_selector` and `max_chars`; `_agent_turn` truncates markdown before rendering; `run_agent` forwards `css_selector` to `fetch_page`; crawl-path `print()` calls replaced with `logger` events; docstrings added to public functions
+- `src/crawl_tool/engine/logging_config.py` — `_order_log_fields` processor added; `timestamp/level/logger/event` always first, remaining keys alphabetical
+- `src/crawl_tool/engine/cli.py` — `--css-selector` and `--max-chars` flags added; crawl command output migrated to logger events; docstrings added
 - `pyproject.toml` — `integration` and `slow` pytest markers registered
 - `tests/` — 189 passing unit tests (up from 176); new: `test_logging_config.py`; expanded: `test_agent_run_agent.py`, `test_main_build_parser.py`
 
 Post-week Rev 3 updates:
 
-- `tests/test_integration.py` — depth and dedup assertions now inspect real fetch calls; domain checks normalize hostnames; date filtering requires a dated article; extraction requires title, publish date, author, and summary
+- `tests/engine/test_integration.py` — depth and dedup assertions now inspect real fetch calls; domain checks normalize hostnames; date filtering requires a dated article; extraction requires title, publish date, author, and summary
 - `docs/architecture.md` — current-state diagrams now include the Gradio interface and registered-schema-first extraction flow
 - `README.md` — current-state usage now documents the Gradio launcher and schema precedence
 - `.gitignore` — failed-run logs and integration result artifacts are excluded from source control
+
+Post-week Rev 6 updates:
+
+- Historical shorthand paths such as `src/agent.py`, `src/crawler.py`, `src/logging_config.py`, `main.py`, and `tests/test_integration.py` now map to `src/crawl_tool/engine/agent.py`, `src/crawl_tool/engine/crawler.py`, `src/crawl_tool/engine/logging_config.py`, `src/crawl_tool/engine/cli.py`, and `tests/engine/test_integration.py`
+- Object storage UI lives in `src/crawl_tool/gradio/ui_storage.py` as the Storage page, not `src/crawl_tool/gradio/ui.py`
+- `crawl-tool query` calls the engine `/query` endpoint via `ENGINE_URL` and prints an ASCII table; it does not read `MINIO_*` directly or emit JSONL
+- Storage downloads use `download_from_storage(job_id, fmt)` for `/storage/{job_id}`; `download_result(job_id, fmt)` remains the completed-job download helper for `/crawl/{job_id}/result`
+- Current crawler User-Agent contact is `tuanhdangdinh@gmail.com`
 
 ### Data Flow This Week
 
 ```mermaid
 flowchart TD
-    CLI["main.py\n--css-selector --max-chars"]
+    CLI["src/crawl_tool/engine/cli.py\n--css-selector --max-chars"]
     CONFIG["AgentConfig\ncss_selector · max_chars"]
-    AGENT["src/agent.py\n_agent_turn — markdown truncation"]
-    CRAWLER["src/crawler.py\nfetch_page(css_selector)"]
+    AGENT["src/crawl_tool/engine/agent.py\n_agent_turn — markdown truncation"]
+    CRAWLER["src/crawl_tool/engine/crawler.py\nfetch_page(css_selector)"]
     CLAUDE["Claude API\nreceives ≤ max_chars markdown"]
-    LOG["src/logging_config.py\nstable field ordering"]
-    INTEG["tests/test_integration.py\nend-to-end on 3 real sites"]
+    LOG["src/crawl_tool/engine/logging_config.py\nstable field ordering"]
+    INTEG["tests/engine/test_integration.py\nend-to-end on 3 real sites"]
     ARCH["docs/architecture.md\nmodule diagram · design decisions"]
 
     CLI -->|"css_selector, max_chars"| CONFIG
@@ -71,17 +80,17 @@ Documents the Week 6 deliverables: integration test suite, architecture document
 
 ## Objective
 
-- Write `tests/test_integration.py` — end-to-end coverage of the intern plan's functional acceptance criteria on three real Vietnamese economy sites
+- Write `tests/engine/test_integration.py` — end-to-end coverage of the intern plan's functional acceptance criteria on three real Vietnamese economy sites
 - Write `docs/architecture.md` — module diagram, data flow, design decisions, and field reference
 - Update `README.md` — project structure, CLI reference, and examples to reflect current state
 - Wire `--css-selector` end-to-end through CLI → `AgentConfig` → `fetch_page`
 - Add `--max-chars` flag to cap markdown sent to Claude per agent turn
-- Replace all remaining `print()` calls with structured `structlog` events; add stable JSON field ordering
+- Replace crawl-path `print()` calls with structured `structlog` events; add stable JSON field ordering
 - Reach 189 passing unit tests; `uv run pytest -m "not integration"` exits 0
 
 ---
 
-## Module: `tests/test_integration.py`
+## Module: `tests/engine/test_integration.py`
 
 ### Design Decisions
 
@@ -94,7 +103,7 @@ Documents the Week 6 deliverables: integration test suite, architecture document
 
 | File | Tests | What is covered |
 |---|---|---|
-| `test_integration.py` | 11 | Site smoke (CafeF, VnEconomy, VietnamPlus), depth correctness, dedup, same-domain filter, date filter, extraction accuracy, `fetch_page` contract |
+| `tests/engine/test_integration.py` | 11 | Site smoke (CafeF, VnEconomy, VietnamPlus), depth correctness, dedup, same-domain filter, date filter, extraction accuracy, `fetch_page` contract |
 
 ---
 
@@ -108,7 +117,7 @@ Documents the Week 6 deliverables: integration test suite, architecture document
 
 ---
 
-## Module: `src/agent.py` Updates
+## Module: `src/crawl_tool/engine/agent.py` Updates
 
 ### Design Decisions
 
@@ -137,7 +146,7 @@ if config.max_chars > 0 and len(markdown) > config.max_chars:
 
 ---
 
-## Module: `src/logging_config.py` Updates
+## Module: `src/crawl_tool/engine/logging_config.py` Updates
 
 ### Design Decisions
 
@@ -158,7 +167,7 @@ def _order_log_fields(
 
 ---
 
-## Module: `main.py` Updates
+## Module: `src/crawl_tool/engine/cli.py` Updates
 
 ### New CLI Flags
 
@@ -173,7 +182,7 @@ def _order_log_fields(
 
 ### Overview
 
-Crawl results are now automatically persisted to MinIO (S3-compatible object storage) on job completion. A DuckDB-based query layer reads directly from the S3 bucket, enabling history search without a relational database. The Gradio UI gains a History tab for browsing and downloading past runs.
+Crawl results are now automatically persisted to MinIO (S3-compatible object storage) on job completion. A DuckDB-based query layer reads directly from the S3 bucket, enabling history search without a relational database. The Gradio UI gains a Storage page for browsing, querying, downloading, and deleting past runs.
 
 ### Design Decisions
 
@@ -184,7 +193,7 @@ Crawl results are now automatically persisted to MinIO (S3-compatible object sto
 - **Auto-upload on job completion** — `service.py` calls `put_result` after the job status transitions to `done`; failures are logged at WARNING and do not affect the HTTP response returned to the UI
 - **`/query` and `/storage/{job_id}` return 503 when storage is disabled** — explicit error instead of silent no-op; callers can distinguish "not configured" from "not found"
 
-### Module: `engine/storage.py`
+### Module: `src/crawl_tool/engine/storage.py`
 
 ```text
 StorageSettings.from_env()  →  reads MINIO_* env vars
@@ -196,7 +205,7 @@ get_result(job_id, settings)           →  bytes | None
 - `put_result` creates the bucket if it does not exist
 - `get_result` returns `None` on `NoSuchKey`; re-raises all other `S3Error` variants
 
-### Module: `engine/query.py`
+### Module: `src/crawl_tool/engine/query.py`
 
 ```text
 run_query(query: CrawlQuery, settings: StorageSettings) → list[CrawlSummary]
@@ -207,7 +216,7 @@ run_query(query: CrawlQuery, settings: StorageSettings) → list[CrawlSummary]
 - All filters are substring (`LIKE '%?%'`) or range comparisons; `LIMIT` is always applied
 - Runs synchronously inside `asyncio.to_thread`
 
-### Module: `engine/contract.py` Additions
+### Module: `src/crawl_tool/engine/contract.py` Additions
 
 | Model | Fields | Description |
 |---|---|---|
@@ -221,15 +230,15 @@ run_query(query: CrawlQuery, settings: StorageSettings) → list[CrawlSummary]
 | `/query` | `POST` | Accept `CrawlQuery` body, return `list[CrawlSummary]`; 503 if storage disabled |
 | `/storage/{job_id}` | `GET` | Fetch raw JSON bytes for a completed job from MinIO; 404 if not found, 503 if disabled |
 
-### Gradio History Tab
+### Gradio Storage Page
 
-The History tab in the UI (added to `src/crawl_tool/gradio/ui.py`) provides:
+The Storage page in the UI (implemented in `src/crawl_tool/gradio/ui_storage.py`) provides:
 
 - **Search form** — seed URL substring, goal substring, date range, and result limit
 - **Results dataframe** — columns: `job_id`, `seed_url`, `goal`, `generated_at`, `total_pages`
 - **Download form** — paste a `job_id`, choose `json` or `jsonl`, click Download; the result is fetched from `/storage/{job_id}` and offered as a file download
 
-The Gradio client (`client.py`) exposes `query_history(filters)` and `download_result(job_id, fmt)` which call `/query` and `/storage/{job_id}` respectively over the existing HTTP session.
+The Gradio client (`client.py`) exposes `query_history(filters)` for `/query` and `download_from_storage(job_id, fmt)` for `/storage/{job_id}` over the existing HTTP session.
 
 ### CLI `query` Subcommand
 
@@ -237,9 +246,9 @@ The Gradio client (`client.py`) exposes `query_history(filters)` and `download_r
 crawl-tool query --seed-url cafef.vn --goal "finance" --date-from 2026-06-01 --limit 10
 ```
 
-- Added to `engine/cli.py` as a `query` subcommand alongside the existing `crawl` subcommand
-- Reads `MINIO_*` env vars via `StorageSettings.from_env()`; prints a warning and exits when storage is not configured
-- Outputs one JSON object per result, one per line (JSONL)
+- Added to `src/crawl_tool/engine/cli.py` as a `query` subcommand alongside the existing crawl command
+- Reads `ENGINE_URL` to call the engine `/query` endpoint; prints storage configuration errors returned by the engine
+- Outputs a compact ASCII table with `job_id`, `seed_url`, `goal`, `generated_at`, and `total_pages`
 
 ### Integration Tests
 
@@ -277,7 +286,7 @@ uv run pytest -m "not integration"
 **Integration test run (requires live internet + `ANTHROPIC_API_KEY`):**
 
 ```bash
-uv run pytest tests/test_integration.py -v -s
+uv run pytest tests/engine/test_integration.py -v -s
 ```
 
 ```text
@@ -292,7 +301,7 @@ shim to bypass that environment issue; the shim was removed immediately afterwar
 
 ```bash
 uv run pytest -m "not integration" -q
-uv run pytest tests/test_integration.py -m integration -v -s
+uv run pytest tests/engine/test_integration.py -m integration -v -s
 uv run ruff check .
 ```
 
@@ -332,8 +341,8 @@ A Rev 4 compliance review compared the delivered tool against every MVP requirem
 
 | Plan item | Resolution |
 |---|---|
-| Depth ceiling — refuse `max_depth` above 5 | `MAX_DEPTH_CEILING = 5` enforced on `AgentConfig.max_depth` (Pydantic `ge=0, le=5`); `main.py` refuses out-of-range values with a clear error before the crawl starts |
-| User-Agent identifies the tool and a contact email | `USER_AGENT = "crawl-tool/0.1 (+mailto:10422086@student.vgu.edu.vn)"` set on `BrowserConfig` in `src/crawler.py` |
+| Depth ceiling — refuse `max_depth` above 5 | `MAX_DEPTH_CEILING = 5` enforced on `AgentConfig.max_depth` (Pydantic `ge=0, le=5`); `src/crawl_tool/engine/cli.py` refuses out-of-range values with a clear error before the crawl starts |
+| User-Agent identifies the tool and a contact email | `USER_AGENT = "crawl-tool/0.1 (+mailto:tuanhdangdinh@gmail.com)"` set on `BrowserConfig` in `src/crawl_tool/engine/crawler.py` |
 | Canonical URL normalizes query parameter order | `_canonical` now sorts query parameters (blank values preserved) in addition to stripping fragments, so `?a=1&b=2` and `?b=2&a=1` deduplicate to one fetch |
 
 The remaining deviations are accepted as out of MVP scope:
@@ -364,7 +373,12 @@ The remaining deviations are accepted as out of MVP scope:
 
 ## Dependency Changes
 
-No new dependencies added in Week 6.
+| Change | Reason |
+|---|---|
+| `fastapi`, `uvicorn[standard]`, `httpx` | Engine service and HTTP client boundary |
+| `gradio` | Web UI for crawl submission, results, and storage history |
+| `minio`, `duckdb` | Object storage persistence and S3-backed history query |
+| `testcontainers[minio]` | Integration coverage for MinIO storage/query behavior |
 
 ---
 
@@ -375,7 +389,7 @@ No new dependencies added in Week 6.
 - [x] `README.md` updated — project structure, `--css-selector`, `--max-chars`
 - [x] `--css-selector` wired end-to-end
 - [x] `--max-chars` truncates Claude input without affecting stored output
-- [x] All `print()` calls replaced with structured `structlog` events
+- [x] Crawl-path `print()` calls replaced with structured `structlog` events
 - [x] 189 unit tests pass — `uv run pytest -m "not integration"` exits 0
 - [x] Integration tests confirmed passing on live sites — 11 passed in 532.24 seconds
 - [x] Rev 3 integration assertions verify real fetch depth, dedup, normalized domains, non-vacuous dates, and all four extraction fields

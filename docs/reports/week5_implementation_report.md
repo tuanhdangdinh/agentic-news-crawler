@@ -9,6 +9,7 @@
 - Rev 4 (2026-06-09): Added missing `src/logging_config.py` section (Week 5 deliverable not yet documented); updated test counts to reflect delivery state; updated Week 6 entry criteria
 - Rev 5 (2026-06-10): Corrected three-retry semantics, inclusive rolling ranges, full `Retry-After` parsing, and structured summary logging
 - Rev 6 (2026-06-29): Added Docker Packaging section — Dockerfile.engine, Dockerfile.gradio, and docker-compose three-service stack
+- Rev 7 (2026-06-29): Added post-week package-layout note mapping historical Week 5 paths to current `src/crawl_tool/engine/` paths
 
 **commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/741b97d397db7a62236aeb47afedcb288518a6a5)
 
@@ -59,6 +60,11 @@ flowchart TD
 ### This Report
 
 - Documents Week 5 implementation: date filter module, retry policy, agent loop integration, CLI wiring, and test suite reorganisation.
+
+Post-week current-state note:
+
+- The Week 5 report preserves the module names as they existed in the original weekly implementation; current packaged paths are `src/crawl_tool/engine/date_filter.py`, `src/crawl_tool/engine/crawler.py`, `src/crawl_tool/engine/agent.py`, `src/crawl_tool/engine/logging_config.py`, and `src/crawl_tool/engine/cli.py`
+- The current console entry point is `crawl-tool`, installed from `pyproject.toml`; historical `uv run python main.py ...` examples map to `uv run crawl-tool ...`
 
 ---
 
@@ -343,9 +349,20 @@ uv run python main.py https://cafef.vn \
   --output output.json
 ```
 
+Current packaged equivalent:
+
+```bash
+uv run crawl-tool https://cafef.vn \
+  --goal "collect the latest banking and stock market articles" \
+  --extract-prompt "extract the article title, publish date, author, and a one-sentence summary" \
+  --date-filter "last 7 days" \
+  --max-depth 1 --max-pages 5 \
+  --output output.json
+```
+
 **Actual output (2026-06-04):**
 
-```
+```text
 [crawl-tool] seed=https://cafef.vn  depth=1  max_pages=5
 [crawl-tool] goal: collect the latest banking and stock market articles
   [  1] depth=0 chars= 17006 links= 84 https://cafef.vn
