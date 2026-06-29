@@ -14,63 +14,90 @@ from crawl_tool.gradio.ui_styles import _RESULT_JS, CUSTOM_CSS
 _NAV_PAGES = ["Quick Crawl", "Advanced Crawl", "Storage"]
 
 _NAV_CSS = """
-.nav-radio label { display: none !important; }
-.nav-radio .wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+.nav-rail {
+  border-right: 1px solid #e5e7eb;
+  min-height: 80vh;
+  padding: 0 0.75rem 0 0;
 }
-.nav-radio .wrap label.svelte-1ixch81 {
-  display: flex !important;
-  padding: 0.65rem 1rem;
-  border-radius: 10px;
+.nav-btn button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  border: none !important;
+  border-radius: 10px !important;
   font-weight: 600;
   font-size: 0.9rem;
-  cursor: pointer;
-  color: var(--crawler-muted);
-  transition: all 0.15s ease;
+  padding: 0.65rem 1rem;
+  background: transparent !important;
+  color: #6b7280 !important;
+  box-shadow: none !important;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.nav-radio .wrap label.svelte-1ixch81:hover {
-  background: rgba(201, 79, 45, 0.06);
-  color: var(--crawler-ink);
+.nav-btn button:hover {
+  background: rgba(201, 79, 45, 0.06) !important;
+  color: #18231f !important;
 }
-.nav-radio input:checked + label.svelte-1ixch81 {
-  background: rgba(201, 79, 45, 0.1);
-  color: var(--crawler-accent);
+.nav-btn-active button {
+  background: rgba(201, 79, 45, 0.12) !important;
+  color: #c94f2d !important;
 }
 """
 
 
-def _switch_page(choice: str) -> list[dict]:
-    return [gr.update(visible=(choice == page)) for page in _NAV_PAGES]
+def _nav_updates(active: str) -> list:
+    """Return (page_visibility × 3, button_classes × 3) updates."""
+    page_updates = [gr.update(visible=(active == p)) for p in _NAV_PAGES]
+    btn_updates = [
+        gr.update(elem_classes="nav-btn nav-btn-active" if active == p else "nav-btn")
+        for p in _NAV_PAGES
+    ]
+    return page_updates + btn_updates
 
 
 def build_demo() -> gr.Blocks:
     """Build the Gradio multi-page crawler interface."""
     with gr.Blocks(title="VSF Crawl Tool") as demo:
         with gr.Row():
-            with gr.Column(scale=1, min_width=180):
+            # ── Sidebar ──────────────────────────────────────────────────
+            with gr.Column(scale=1, min_width=200, elem_classes="nav-rail"):
                 gr.HTML(
-                    '<div style="padding: 1.5rem 1rem 1rem;">'
-                    '<span style="font-weight: 900; font-size: 1.1rem; color: #18231f;">VSF Crawl Tool</span>'
-                    "</div>"
+                    '<div style="padding: 1.5rem 0.5rem 1rem;">'
+                    '<span style="font-weight: 900; font-size: 1.1rem; color: #18231f;">'
+                    "VSF Crawl Tool"
+                    "</span></div>"
                 )
-                nav = gr.Radio(
-                    _NAV_PAGES,
-                    value="Quick Crawl",
-                    label="",
-                    elem_classes="nav-radio",
+                btn_quick = gr.Button(
+                    "Quick Crawl", elem_classes="nav-btn nav-btn-active", size="sm"
+                )
+                btn_advanced = gr.Button(
+                    "Advanced Crawl", elem_classes="nav-btn", size="sm"
+                )
+                btn_storage = gr.Button(
+                    "Storage", elem_classes="nav-btn", size="sm"
                 )
 
+            # ── Content area ─────────────────────────────────────────────
             with gr.Column(scale=4):
                 quick_col = build_quick_crawl_page()
                 advanced_col = build_advanced_crawl_page()
-                storage_col, _storage_load, _storage_stats_html, _storage_objects_table = build_storage_page()
+                storage_col, _storage_load, _storage_stats_html, _storage_objects_table = (
+                    build_storage_page()
+                )
 
-        nav.change(
-            fn=_switch_page,
-            inputs=[nav],
-            outputs=[quick_col, advanced_col, storage_col],
+        _page_outputs = [quick_col, advanced_col, storage_col]
+        _btn_outputs = [btn_quick, btn_advanced, btn_storage]
+
+        btn_quick.click(
+            fn=lambda: _nav_updates("Quick Crawl"),
+            outputs=_page_outputs + _btn_outputs,
+        )
+        btn_advanced.click(
+            fn=lambda: _nav_updates("Advanced Crawl"),
+            outputs=_page_outputs + _btn_outputs,
+        )
+        btn_storage.click(
+            fn=lambda: _nav_updates("Storage"),
+            outputs=_page_outputs + _btn_outputs,
         )
         demo.load(fn=_storage_load, outputs=[_storage_stats_html, _storage_objects_table])
 
