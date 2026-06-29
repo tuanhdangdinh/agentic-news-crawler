@@ -388,3 +388,66 @@ async def test_run_job_uploads_to_storage_on_success():
     mock_put.assert_awaited_once()
     call_args = mock_put.call_args
     assert call_args.args[0] == job_id
+
+
+@pytest.mark.asyncio
+async def test_parse_endpoint_returns_parsed_fields():
+    app = create_app()
+    parsed = {"seed_url": "https://cafef.vn", "goal": "finance news"}
+    with patch("crawl_tool.engine.service.parse_crawl_prompt", AsyncMock(return_value=parsed)):
+        async with _client(app) as client:
+            resp = await client.post("/parse", json={"prompt": "finance news from cafef.vn"})
+    assert resp.status_code == 200
+    assert resp.json()["seed_url"] == "https://cafef.vn"
+
+
+@pytest.mark.asyncio
+async def test_parse_endpoint_returns_422_on_parse_error():
+    app = create_app()
+    with patch(
+        "crawl_tool.engine.service.parse_crawl_prompt",
+        AsyncMock(side_effect=PromptParseError("no url found")),
+    ):
+        async with _client(app) as client:
+            resp = await client.post("/parse", json={"prompt": "vague prompt"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_storage_returns_overview():
+    objects = [{"job_id": "abc", "size_bytes": 512, "last_modified": "2026-06-29T10:00:00+00:00"}]
+    with patch("crawl_tool.engine.service.list_results", AsyncMock(return_value=objects)):
+        with patch.dict("os.environ", {"MINIO_ENDPOINT": "localhost:9000"}):
+            app2 = create_app()
+            async with _client(app2) as client:
+                resp = await client.get("/storage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_files"] == 1
+    assert body["total_size_bytes"] == 512
+
+
+@pytest.mark.asyncio
+async def test_get_storage_returns_503_when_not_configured():
+    app = create_app()
+    async with _client(app) as client:
+        resp = await client.get("/storage")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_returns_204():
+    with patch.dict("os.environ", {"MINIO_ENDPOINT": "localhost:9000"}):
+        app = create_app()
+    with patch("crawl_tool.engine.service.delete_stored_result", AsyncMock(return_value=None)):
+        async with _client(app) as client:
+            resp = await client.delete("/storage/abc123")
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_returns_503_when_not_configured():
+    app = create_app()
+    async with _client(app) as client:
+        resp = await client.delete("/storage/abc123")
+    assert resp.status_code == 503

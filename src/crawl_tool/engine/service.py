@@ -10,6 +10,7 @@ from uuid import uuid4
 import structlog
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from minio.error import S3Error
 
 from crawl_tool.engine.agent import CrawlState
 from crawl_tool.engine.contract import (
@@ -20,12 +21,21 @@ from crawl_tool.engine.contract import (
     JobProgress,
     JobResult,
     JobStatus,
+    ParseRequest,
+    StorageObject,
+    StorageOverview,
 )
 from crawl_tool.engine.output import serialize_payload
 from crawl_tool.engine.prompt_parser import PromptParseError, parse_crawl_prompt
 from crawl_tool.engine.query import run_query
 from crawl_tool.engine.runner import execute
-from crawl_tool.engine.storage import StorageSettings, get_result, put_result
+from crawl_tool.engine.storage import (
+    StorageSettings,
+    delete_stored_result,
+    get_result,
+    list_results,
+    put_result,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -198,6 +208,41 @@ def create_app() -> FastAPI:
         if not storage_settings.enabled:
             raise HTTPException(status_code=503, detail="storage not configured")
         return await run_query(query, storage_settings)
+
+    @app.post("/parse", status_code=200)
+    async def parse_prompt(request: ParseRequest) -> dict:
+        """Parse a natural-language crawl description into structured fields."""
+        try:
+            return await parse_crawl_prompt(request.prompt)
+        except PromptParseError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/storage")
+    async def get_storage_overview() -> StorageOverview:
+        """List all stored crawl results with bucket-level stats."""
+        if not storage_settings.enabled:
+            raise HTTPException(status_code=503, detail="storage not configured")
+        objects = await list_results(storage_settings)
+        last_mod = max((o["last_modified"] for o in objects), default=None)
+        return StorageOverview(
+            total_files=len(objects),
+            total_size_bytes=sum(o["size_bytes"] for o in objects),
+            last_modified=last_mod,
+            objects=[StorageObject(**o) for o in objects],
+        )
+
+    @app.delete("/storage/{job_id}", status_code=204)
+    async def delete_storage_result(job_id: str) -> Response:
+        """Delete a stored crawl result from MinIO."""
+        if not storage_settings.enabled:
+            raise HTTPException(status_code=503, detail="storage not configured")
+        try:
+            await delete_stored_result(job_id, storage_settings)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                raise HTTPException(status_code=404, detail="result not found") from exc
+            raise
+        return Response(status_code=204)
 
     @app.get("/storage/{job_id}")
     async def get_stored_result(job_id: str, format: str = "json") -> Response:
