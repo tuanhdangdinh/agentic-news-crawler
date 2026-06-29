@@ -169,3 +169,12 @@ async def test_run_crawl_surfaces_terminal_job_error(monkeypatch):
     ]
 
     assert frames[0][0] == "Crawl failed: boom"
+
+
+def test_switch_page_shows_only_selected():
+    from crawl_tool.gradio.app import _switch_page
+
+    updates = _switch_page("Advanced Crawl")
+    assert updates[0]["visible"] is False  # Quick Crawl hidden
+    assert updates[1]["visible"] is True  # Advanced Crawl shown
+    assert updates[2]["visible"] is False  # Storage hidden

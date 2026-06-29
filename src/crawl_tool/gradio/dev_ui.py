@@ -1,18 +1,15 @@
-"""Launch the Crawl Tool UI pre-loaded with a crawl result JSON file.
+"""Launch the Crawl Tool UI for development.
 
 Usage:
-    uv run dev_ui.py results-cafef.json
-    uv run dev_ui.py /path/to/crawl-output.json
+    uv run dev_ui.py
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import sys
-from pathlib import Path
 
-from crawl_tool.gradio.ui import _RESULT_JS, CUSTOM_CSS, build_demo
+from crawl_tool.gradio.app import _NAV_CSS, build_demo
+from crawl_tool.gradio.ui_styles import _RESULT_JS, CUSTOM_CSS
 
 DEV_UI_CSS = """
 .rt-row {
@@ -36,20 +33,10 @@ DEV_UI_HEAD = f"<script>({_RESULT_JS})();</script>"
 
 
 def main() -> None:
-    """Launch the crawler UI with a result payload preloaded."""
-    if len(sys.argv) < 2:
-        print("Usage: uv run dev_ui.py <result.json>", file=sys.stderr)
-        sys.exit(1)
-
-    path = Path(sys.argv[1])
-    if not path.exists():
-        print(f"File not found: {path}", file=sys.stderr)
-        sys.exit(1)
-
-    payload = json.loads(path.read_text())
+    """Launch the crawler UI for development."""
     logging.basicConfig(level=logging.INFO)
-    build_demo(initial_payload=payload).queue(default_concurrency_limit=1).launch(
-        css=f"{CUSTOM_CSS}\n{DEV_UI_CSS}",
+    build_demo().queue(default_concurrency_limit=1).launch(
+        css=f"{CUSTOM_CSS}\n{_NAV_CSS}\n{DEV_UI_CSS}",
         head=DEV_UI_HEAD,
         inbrowser=True,
     )
