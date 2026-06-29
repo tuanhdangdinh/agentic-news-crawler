@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from crawl_tool.gradio import ui
+from crawl_tool.gradio import ui_shared as ui
 
 
 def _async_return(value):
