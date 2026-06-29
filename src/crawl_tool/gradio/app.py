@@ -65,13 +65,14 @@ def build_demo() -> gr.Blocks:
             with gr.Column(scale=4):
                 quick_col = build_quick_crawl_page()
                 advanced_col = build_advanced_crawl_page()
-                storage_col = build_storage_page()
+                storage_col, _storage_load, _storage_stats_html, _storage_objects_table = build_storage_page()
 
         nav.change(
             fn=_switch_page,
             inputs=[nav],
             outputs=[quick_col, advanced_col, storage_col],
         )
+        demo.load(fn=_storage_load, outputs=[_storage_stats_html, _storage_objects_table])
 
     return demo
 

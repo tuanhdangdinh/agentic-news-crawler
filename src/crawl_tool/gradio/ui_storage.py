@@ -59,7 +59,7 @@ def _build_stats_html(overview: dict) -> str:
     )
 
 
-def build_storage_page() -> gr.Column:
+def build_storage_page() -> tuple[gr.Column, object, gr.HTML, gr.Dataframe]:
     """Build the storage page as a hideable column."""
     with gr.Column(visible=False) as col:
 
@@ -159,7 +159,7 @@ def build_storage_page() -> gr.Column:
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 msg = "Not found." if status == 404 else f"Error {status}."
-                return gr.update(visible=False), gr.update(value=f"**{msg}**"), "", []
+                return gr.update(visible=False), gr.update(value=f"**{msg}**"), "", gr.update()
             overview = await get_storage_overview()
             rows = [
                 [o["job_id"], _format_size(o["size_bytes"]), o["last_modified"][:19]]
@@ -206,4 +206,4 @@ def build_storage_page() -> gr.Column:
         )
         hist_dl_btn.click(fn=_on_download, inputs=[hist_dl_id, hist_dl_fmt], outputs=[hist_dl_file])
 
-    return col
+    return col, _load_overview, stats_html, objects_table
