@@ -10,7 +10,7 @@
 - Rev 5 (2026-06-10): Corrected three-retry semantics, inclusive rolling ranges, full `Retry-After` parsing, and structured summary logging
 - Rev 6 (2026-06-29): Added Docker Packaging section — Dockerfile.engine, Dockerfile.gradio, and docker-compose three-service stack
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/3e870a4f93809ebaeae9f3aae1dc91809faf90d4)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/741b97d397db7a62236aeb47afedcb288518a6a5)
 
 ---
 

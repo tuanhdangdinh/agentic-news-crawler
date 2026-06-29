@@ -9,7 +9,7 @@
 - Rev 4 (2026-06-12): plan-compliance review — added Plan Deviations section; implemented depth ceiling, identifying User-Agent, and query-parameter canonicalization
 - Rev 5 (2026-06-29): Added Object Storage section — MinIO storage module, DuckDB query layer, `/query` and `/storage` API endpoints, Gradio History tab, CLI `query` subcommand, and integration tests
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/17b19cd)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/741b97d397db7a62236aeb47afedcb288518a6a5)
 
 ---
 
