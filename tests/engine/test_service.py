@@ -416,11 +416,13 @@ async def test_parse_endpoint_returns_422_on_parse_error():
 @pytest.mark.asyncio
 async def test_get_storage_returns_overview():
     objects = [{"job_id": "abc", "size_bytes": 512, "last_modified": "2026-06-29T10:00:00+00:00"}]
-    with patch("crawl_tool.engine.service.list_results", AsyncMock(return_value=objects)):
-        with patch.dict("os.environ", {"MINIO_ENDPOINT": "localhost:9000"}):
-            app2 = create_app()
-            async with _client(app2) as client:
-                resp = await client.get("/storage")
+    with (
+        patch("crawl_tool.engine.service.list_results", AsyncMock(return_value=objects)),
+        patch.dict("os.environ", {"MINIO_ENDPOINT": "localhost:9000"}),
+    ):
+        app2 = create_app()
+        async with _client(app2) as client:
+            resp = await client.get("/storage")
     assert resp.status_code == 200
     body = resp.json()
     assert body["total_files"] == 1
@@ -451,3 +453,22 @@ async def test_delete_storage_returns_503_when_not_configured():
     async with _client(app) as client:
         resp = await client.delete("/storage/abc123")
     assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_delete_storage_returns_404_on_missing_key():
+    from minio.error import S3Error
+
+    async def raise_no_such_key(*args, **kwargs):
+        err = S3Error(None, "NoSuchKey", "The specified key does not exist.", None, None, None)
+        raise err
+
+    with patch.dict("os.environ", {"MINIO_ENDPOINT": "localhost:9000"}):
+        app = create_app()
+    with patch(
+        "crawl_tool.engine.service.delete_stored_result",
+        side_effect=raise_no_such_key,
+    ):
+        async with _client(app) as client:
+            resp = await client.delete("/storage/missing-job")
+    assert resp.status_code == 404
