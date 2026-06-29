@@ -77,6 +77,27 @@ def _get_result_sync(job_id: str, settings: StorageSettings) -> bytes | None:
         raise
 
 
+def _list_results_sync(settings: StorageSettings) -> list[dict]:
+    client = _make_client(settings)
+    results = []
+    for obj in client.list_objects(settings.bucket):
+        name: str = obj.object_name
+        if not name.startswith("crawl-") or not name.endswith(".json"):
+            continue
+        job_id = name[len("crawl-") : -len(".json")]
+        results.append({
+            "job_id": job_id,
+            "size_bytes": obj.size,
+            "last_modified": obj.last_modified.isoformat(),
+        })
+    return results
+
+
+def _delete_result_sync(job_id: str, settings: StorageSettings) -> None:
+    client = _make_client(settings)
+    client.remove_object(settings.bucket, f"crawl-{job_id}.json")
+
+
 async def put_result(job_id: str, payload: dict, settings: StorageSettings) -> None:
     """Upload result payload to MinIO as crawl-{job_id}.json, injecting job_id into meta."""
     await asyncio.to_thread(_put_result_sync, job_id, payload, settings)
@@ -85,3 +106,13 @@ async def put_result(job_id: str, payload: dict, settings: StorageSettings) -> N
 async def get_result(job_id: str, settings: StorageSettings) -> bytes | None:
     """Fetch raw bytes for crawl-{job_id}.json from MinIO. Returns None if not found."""
     return await asyncio.to_thread(_get_result_sync, job_id, settings)
+
+
+async def list_results(settings: StorageSettings) -> list[dict]:
+    """List all stored crawl results. Returns [{job_id, size_bytes, last_modified}]."""
+    return await asyncio.to_thread(_list_results_sync, settings)
+
+
+async def delete_stored_result(job_id: str, settings: StorageSettings) -> None:
+    """Delete crawl-{job_id}.json from MinIO."""
+    await asyncio.to_thread(_delete_result_sync, job_id, settings)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from crawl_tool.engine.storage import (
     StorageSettings,
+    _delete_result_sync,
     _get_result_sync,
+    _list_results_sync,
     _put_result_sync,
 )
 
@@ -107,3 +110,40 @@ def test_get_result_returns_none_on_missing_key():
         result = _get_result_sync("missing", _settings())
 
     assert result is None
+
+
+def test_list_results_returns_objects():
+    mock_obj = MagicMock()
+    mock_obj.object_name = "crawl-abc123.json"
+    mock_obj.size = 1024
+    mock_obj.last_modified = datetime(2026, 6, 29, 10, 0, 0, tzinfo=UTC)
+
+    mock_client = MagicMock()
+    mock_client.list_objects.return_value = [mock_obj]
+
+    with patch("crawl_tool.engine.storage._make_client", return_value=mock_client):
+        results = _list_results_sync(_settings())
+
+    assert results == [
+        {"job_id": "abc123", "size_bytes": 1024, "last_modified": "2026-06-29T10:00:00+00:00"}
+    ]
+    mock_client.list_objects.assert_called_once_with("crawl-results")
+
+
+def test_list_results_empty_bucket():
+    mock_client = MagicMock()
+    mock_client.list_objects.return_value = []
+
+    with patch("crawl_tool.engine.storage._make_client", return_value=mock_client):
+        results = _list_results_sync(_settings())
+
+    assert results == []
+
+
+def test_delete_result_calls_remove_object():
+    mock_client = MagicMock()
+
+    with patch("crawl_tool.engine.storage._make_client", return_value=mock_client):
+        _delete_result_sync("abc123", _settings())
+
+    mock_client.remove_object.assert_called_once_with("crawl-results", "crawl-abc123.json")
