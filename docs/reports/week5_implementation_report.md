@@ -11,7 +11,7 @@
 - Rev 6 (2026-06-29): Added Docker Packaging section — Dockerfile.engine, Dockerfile.gradio, and docker-compose three-service stack
 - Rev 7 (2026-06-29): Added post-week package-layout note mapping historical Week 5 paths to current `src/crawl_tool/engine/` paths
 
-**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/741b97d397db7a62236aeb47afedcb288518a6a5)
+**commit:** [link](https://github.com/tuanhdangdinh/agentic-news-crawler/commit/7ff35beb5969fca4745cc9a68452df354eaede3a)
 
 ---
 
