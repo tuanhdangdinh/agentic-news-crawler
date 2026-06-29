@@ -60,3 +60,54 @@ async def test_download_result_returns_bytes(httpx_mock):
     )
 
     assert data == b"{}"
+
+
+@pytest.mark.asyncio
+async def test_parse_prompt_returns_parsed_fields(httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="http://engine/parse",
+        json={"seed_url": "https://cafef.vn", "goal": "finance news"},
+    )
+    result = await client.parse_prompt("finance news from cafef.vn", base_url="http://engine")
+    assert result["seed_url"] == "https://cafef.vn"
+
+
+@pytest.mark.asyncio
+async def test_parse_prompt_raises_on_422(httpx_mock):
+    import httpx
+
+    httpx_mock.add_response(
+        method="POST",
+        url="http://engine/parse",
+        status_code=422,
+        json={"detail": "no url found"},
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.parse_prompt("vague", base_url="http://engine")
+
+
+@pytest.mark.asyncio
+async def test_get_storage_overview_returns_dict(httpx_mock):
+    httpx_mock.add_response(
+        method="GET",
+        url="http://engine/storage",
+        json={
+            "total_files": 2,
+            "total_size_bytes": 1024,
+            "last_modified": "2026-06-29T10:00:00+00:00",
+            "objects": [],
+        },
+    )
+    result = await client.get_storage_overview(base_url="http://engine")
+    assert result["total_files"] == 2
+
+
+@pytest.mark.asyncio
+async def test_delete_stored_result_sends_delete(httpx_mock):
+    httpx_mock.add_response(
+        method="DELETE",
+        url="http://engine/storage/abc123",
+        status_code=204,
+    )
+    await client.delete_stored_result("abc123", base_url="http://engine")

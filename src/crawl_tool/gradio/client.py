@@ -140,3 +140,37 @@ async def download_from_storage(
         response = await http.get(f"/storage/{job_id}", params={"format": fmt})
         response.raise_for_status()
         return response.content
+
+
+async def parse_prompt(
+    prompt: str,
+    *,
+    base_url: str = ENGINE_URL,
+) -> dict:
+    """Parse a natural-language crawl description into structured fields via POST /parse."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as http:
+        response = await http.post("/parse", json={"prompt": prompt})
+        response.raise_for_status()
+        return response.json()
+
+
+async def get_storage_overview(
+    *,
+    base_url: str = ENGINE_URL,
+) -> dict:
+    """Fetch bucket stats and object list from GET /storage."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as http:
+        response = await http.get("/storage")
+        response.raise_for_status()
+        return response.json()
+
+
+async def delete_stored_result(
+    job_id: str,
+    *,
+    base_url: str = ENGINE_URL,
+) -> None:
+    """Delete a stored crawl result via DELETE /storage/{job_id}."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as http:
+        response = await http.delete(f"/storage/{job_id}")
+        response.raise_for_status()
